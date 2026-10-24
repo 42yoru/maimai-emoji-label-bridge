@@ -1,6 +1,6 @@
 [plugin]
 enabled = true
-config_version = "0.1.0"
+config_version = "0.1.1"
 
 [behavior]
 # 匹配不到表情时怎么办：
