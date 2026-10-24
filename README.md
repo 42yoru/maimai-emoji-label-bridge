@@ -1,5 +1,9 @@
 # 表情标签桥接（Emoji Label Bridge）
 
+<p align="center">
+  <img src="icon.png" width="200" alt="插件图标">
+</p>
+
 <p>
   <a href="https://github.com/42yoru/maimai-emoji-label-bridge/actions/workflows/ci.yml"><img src="https://github.com/42yoru/maimai-emoji-label-bridge/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
@@ -55,7 +59,7 @@
 
 ## 向量索引怎么维护
 
-- 索引文件：`<插件数据目录>/emoji_vectors.json`，每条向量是单位化 float32 + base64，570 张表情约 6.3MB；
+- 索引文件：`<插件数据目录>/emoji_vectors.json`，每条向量是单位化 float32 + base64，570 张表情约 6.0MB；
 - 缓存文件：`<插件数据目录>/label_cache.json`，标签 → 命中结果（含未命中），重复标签零网络开销；
 - 数据源：只查宿主的 `images` 表（emoji、已注册、未封禁、文件存在），只取 hash 与描述，不拉图片；
 - 脏描述会被过滤：以 `[`/`【` 开头或带 `<|` 之类特殊 token 的描述不参与匹配；
@@ -74,10 +78,16 @@
 
 ## 安装
 
+**从插件市场安装**：在插件中心搜索「表情标签桥接」，或按插件 ID `github.42yoru.maimai-emoji-label-bridge` 查找。
+
+**手动安装**：
+
 1. 把本目录放到 MaiBot 的 `plugins/` 下（目录名随意，ID 由 `_manifest.json` 决定）；
 2. 重启 MaiBot，或在插件页触发热重载；
 3. 首次加载会自动生成 `config.toml`（`config.toml.example` 只是带注释的参考，不会被自动读取）；
 4. 在 WebUI 插件页确认已启用。首次启动约 30 秒后开始建向量索引，期间精确/本地两档已可用。
+
+> **嵌入模型依赖**：向量兜底需要宿主在 `model_config.toml` 里配好 `[model_task_config.embedding]`。没配或调用失败时，插件自动只走「精确 + 本地」两档，不影响发送，也不会输出错误的表情。
 
 ## 配置
 
@@ -109,3 +119,12 @@
 - 只做「文字标签 → 表情组件」，不会把已经被拆成多条的文字重新合并；
 - 同一消息多个标签逐个匹配，受 `max_tags_per_message` 限制；
 - 文件缺失的表情记录不进索引，避免发送时读文件失败。
+
+## 插件信息
+
+| 项 | 值 |
+| --- | --- |
+| 插件 ID | `github.42yoru.maimai-emoji-label-bridge` |
+| 版本 | 0.1.2 |
+| 仓库 | <https://github.com/42yoru/maimai-emoji-label-bridge> |
+| 许可证 | MIT |
