@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
-  "version": "0.1.3",
-  "plugin_type": "extension",
+  "version": "0.1.4",
+  "plugin_type": "media",
   "name": "表情标签桥接 (Emoji Label Bridge)",
   "description": "把回复正文里模型凭空写出的「[表情包: 标签]」接成真表情：精确描述 → 本地标签重叠 → 嵌入模型兜底，全部未命中时按配置删除标签。发送层实现，旧 reply 工具与被动式 replyer 都通用，不改主程序。",
   "author": {

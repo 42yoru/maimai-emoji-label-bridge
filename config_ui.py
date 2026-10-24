@@ -105,7 +105,9 @@ _HINTS: Dict[str, str] = {
     "match.local_threshold": "0.6×标签覆盖度 + 0.4×包含度；越过即命中，不再调嵌入模型。默认 0.5。",
     "match.enable_vector": "关掉后只走精确与本地两档，完全不碰嵌入模型。",
     "match.vector_threshold": "实测相关命中在 0.71~0.87，无关内容多在 0.65 以下，默认 0.68。",
-    "match.vector_timeout_ms": "实测单次嵌入 0.9~3.6 秒抖动；超时按未命中处理，绝不挂住发送。",
+    "match.vector_timeout_ms": (
+        "实测单次嵌入 0.9~3.6 秒抖动；超时按未命中处理。上限受发送层 Hook 的 5000ms 约束，不要超过它。"
+    ),
     "match.only_whole_message": "开启后，标签夹在正文里时直接按未命中处理，保护文字发送速度。",
     "match.require_char_overlap": "挡掉「语义分高但字面毫无关系」的胡配。",
     "match.candidate_limit": "向量比对前用字符重叠粗筛的候选数；粗筛为空时退回全量。",

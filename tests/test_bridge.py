@@ -496,3 +496,39 @@ class IndexSyncTest(_BridgeTestBase):
             cache_size=8,
         )
         self.assertIsNone(hit)
+
+
+class LibraryRefreshTest(_BridgeTestBase):
+    """表情库刷新时的可观测性。"""
+
+    async def test_empty_library_warns(self) -> None:
+        """读到 0 条可用表情时必须告警，不能安静地按 drop 处理。"""
+
+        plugin = _build_plugin(self.data_dir)
+
+        async def empty_query(*_args: Any, **_kwargs: Any) -> list:
+            return []
+
+        plugin.ctx.db = SimpleNamespace(query=empty_query)
+        with self.assertLogs(LOGGER, level="WARNING") as captured:
+            refreshed = await plugin._refresh_library()
+
+        self.assertTrue(refreshed)
+        self.assertEqual(plugin._library.size, 0)
+        self.assertTrue(any("0 条可用表情" in line for line in captured.output), captured.output)
+
+    async def test_all_rows_filtered_warns(self) -> None:
+        """行存在但全被当成脏数据过滤掉时同样要告警。"""
+
+        plugin = _build_plugin(self.data_dir)
+
+        async def dirty_query(*_args: Any, **_kwargs: Any) -> list:
+            return [{"image_hash": "a", "description": "[表情包：,<|begin_of_box|>脏描述"}]
+
+        plugin.ctx.db = SimpleNamespace(query=dirty_query)
+        with self.assertLogs(LOGGER, level="WARNING") as captured:
+            refreshed = await plugin._refresh_library()
+
+        self.assertTrue(refreshed)
+        self.assertEqual(plugin._library.size, 0)
+        self.assertTrue(any("0 条可用表情" in line for line in captured.output), captured.output)

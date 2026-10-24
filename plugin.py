@@ -59,7 +59,7 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_order__ = 0
 
     enabled: bool = Field(default=True, description="是否启用插件；关掉后发送链路完全不受影响")
-    config_version: str = Field(default="0.1.3", description="配置版本")
+    config_version: str = Field(default="0.1.4", description="配置版本")
 
 
 class BehaviorConfig(PluginConfigBase):
@@ -257,7 +257,7 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         description="把出站正文里的「[表情包: 标签]」假标签接成真表情，未命中时按配置处理。",
         mode=HookMode.BLOCKING,
         order=HookOrder.NORMAL,
-        timeout_ms=3000,
+        timeout_ms=5000,
         error_policy=ErrorPolicy.SKIP,
     )
     async def bridge_after_build_message(self, **kwargs: Any) -> Dict[str, Any]:
@@ -478,6 +478,12 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         records = build_records(rows)
         if len(records) != len(rows):
             self.ctx.logger.info("表情库过滤掉 %s 条脏记录（空描述/异常描述/文件缺失）", len(rows) - len(records))
+        if not records:
+            # 库为空时插件仍会按 miss_policy 处理标签，这里必须让人看见，不能安静地删
+            self.ctx.logger.warning(
+                "表情库读到 0 条可用表情：未命中的标签会按 miss_policy 处理；"
+                "请确认 images 表里有已注册表情，或把 behavior.miss_policy 改成 keep 作为退路。"
+            )
         self._library = EmojiLibrary(records)
         return True
 
