@@ -28,6 +28,7 @@ import asyncio
 from maibot_sdk import Field, HookHandler, MaiBotPlugin, PluginConfigBase
 from maibot_sdk.types import ErrorPolicy, HookMode, HookOrder
 
+from .config_ui import build_config_ui_schema
 from .emoji_library import EmojiLibrary, EmojiRecord, build_records, has_char_overlap
 from .label_text import (
     TAG_KIND,
@@ -58,7 +59,7 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_order__ = 0
 
     enabled: bool = Field(default=True, description="是否启用插件；关掉后发送链路完全不受影响")
-    config_version: str = Field(default="0.1.2", description="配置版本")
+    config_version: str = Field(default="0.1.3", description="配置版本")
 
 
 class BehaviorConfig(PluginConfigBase):
@@ -197,6 +198,12 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
     """把回复正文里的假表情标签接成真表情的发送层插件。"""
 
     config_model = BridgeConfig
+
+    @classmethod
+    def build_config_schema(cls, **plugin_info: Any) -> Dict[str, Any]:
+        """只重组 WebUI 的展示结构，配置模型与 TOML 路径保持不变。"""
+
+        return build_config_ui_schema(super().build_config_schema(**plugin_info))
 
     def __init__(self) -> None:
         super().__init__()

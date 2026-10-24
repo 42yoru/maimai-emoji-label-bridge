@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+- 配置页汉化：新增 `config_ui.py`，为全部 23 个配置项补中文标签、提示与分块，常用项与高级项拆成两个页签。
+- `miss_policy` 改为下拉选择（drop / keep / abort），`config_version` 置灰。
+
 ## 0.1.2
 
 - README 补充插件市场安装方式、嵌入模型依赖说明，并新增插件信息表。
