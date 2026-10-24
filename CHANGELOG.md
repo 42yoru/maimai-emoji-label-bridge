@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.5
+
+- README「插件信息」里的版本号与 manifest 对齐（之前漏更到 0.1.2）。
+- 删除 `label_text.strip_tags()` 死代码，测试同步收敛。
+
 ## 0.1.4
 
 - 插件类型改为 `media`（按审核建议，WebUI 分类筛选更准确）。

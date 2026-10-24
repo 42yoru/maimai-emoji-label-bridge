@@ -89,11 +89,6 @@ def has_tag(text: str) -> bool:
     return bool(_TAG_PATTERN.search(str(text or "")))
 
 
-def strip_tags(text: str) -> str:
-    """去掉正文里的全部表情标签，供 ``miss_policy = drop`` 使用。"""
-
-    return _TAG_PATTERN.sub("", str(text or "")).strip()
-
 
 def build_tag_text(description: str) -> str:
     """按宿主入站表情的渲染格式构造表情组件的可见文本。"""

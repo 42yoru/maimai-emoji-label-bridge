@@ -12,7 +12,6 @@ from emoji_label_bridge.label_text import (
     normalize_tag_text,
     parse_segments,
     split_tags,
-    strip_tags,
 )
 
 
@@ -69,10 +68,9 @@ class LabelTextTest(TestCase):
 
         self.assertEqual(normalize_tag_text(" 亲亲，  卖萌 "), "亲亲, 卖萌")
 
-    def test_strip_and_build_tag_text(self) -> None:
-        """删除标签与重建标签文本要成对可用。"""
+    def test_build_tag_text(self) -> None:
+        """表情组件的可见文本要按宿主入站渲染格式拼出来。"""
 
-        self.assertEqual(strip_tags("先说一句[表情包: 害羞]再说"), "先说一句再说")
         self.assertEqual(build_tag_text("亲亲"), "[表情包: 亲亲]")
         self.assertEqual(build_tag_text(""), "[表情包]")
 
