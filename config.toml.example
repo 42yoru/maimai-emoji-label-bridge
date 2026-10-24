@@ -1,0 +1,54 @@
+[plugin]
+enabled = true
+config_version = "0.1.0"
+
+[behavior]
+# 匹配不到表情时怎么办：
+#   drop  = 删掉标签，正文照常发送（默认，最安全）
+#   keep  = 原样保留「[表情包: 标签]」文字
+#   abort = 直接取消这条消息（不建议，会让回复少一段）
+miss_policy = "drop"
+# 单条消息最多处理几个标签，超出的直接丢弃，避免一条消息反复等向量兜底
+max_tags_per_message = 3
+# 本次消息已经带了真表情（planner 用 attach_emoji 发的）时，把正文里的标签删掉，避免重复
+dedupe_with_existing_emoji = true
+
+[match]
+# 本地标签重叠度阈值：0.6*覆盖度 + 0.4*包含度，越过即命中，不再调嵌入模型
+local_threshold = 0.5
+# 是否启用嵌入模型兜底（前两档都未命中时才走）
+enable_vector = true
+# 向量余弦相似度阈值：低于它就当没命中，走 miss_policy（实测相关命中多在 0.71~0.87）
+vector_threshold = 0.68
+# 单次嵌入请求硬超时（毫秒）；超时按未命中处理，绝不挂住发送（实测单次 0.9~3.6s）
+vector_timeout_ms = 3000
+# 向量命中还要求标签与描述有字符重叠，挡掉「语义分数高但字面无关」的胡配
+require_char_overlap = true
+# 只在「整条消息就是一条标签」时才走向量兜底；正文里夹标签时直接按未命中处理，保护文字发送速度
+only_whole_message = true
+# 向量比对前用字符重叠粗筛的候选数；越小越快，粗筛为空时退回全量
+candidate_limit = 120
+
+[index]
+# 关掉后只走精确与本地两档，完全不用嵌入模型
+enabled = true
+# 使用的模型任务名，对应 model_config.toml 的 model_task_config 段
+embedding_task = "embedding"
+# 增量同步间隔：新收录的表情会在下一轮同步里补向量
+sync_interval_seconds = 600
+# 插件加载后延迟多久开始首次同步（秒），避开启动高峰
+startup_delay_seconds = 30
+# 索引尚未补齐时的轮询间隔（秒）；补齐后改按 sync_interval_seconds 周期同步
+bootstrap_interval_seconds = 5
+# 每批嵌入的文本条数
+batch_size = 32
+# 每轮同步最多补算多少条向量，剩余的下轮继续
+max_items_per_sync = 64
+# 批量嵌入的并发数
+max_concurrent = 4
+# 参与嵌入的表情描述最大字符数，超长截断
+description_max_chars = 256
+# 标签查询结果缓存条数（含未命中结果），命中缓存时零网络开销
+cache_size = 512
+# 标签缓存有效期（秒），0 表示不过期
+cache_ttl_seconds = 604800

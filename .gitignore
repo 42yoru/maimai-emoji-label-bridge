@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+*.tmp
+
+# 运行时配置由宿主按 config_model 生成，不进仓库
+/config.toml
+
+# 本地索引、缓存与运行数据
+data/
+logs/
+
+# 宿主保存插件配置时生成的备份
+config_back/
