@@ -59,7 +59,7 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_order__ = 0
 
     enabled: bool = Field(default=True, description="是否启用插件；关掉后发送链路完全不受影响")
-    config_version: str = Field(default="0.1.6", description="配置版本")
+    config_version: str = Field(default="0.1.7", description="配置版本")
 
 
 class BehaviorConfig(PluginConfigBase):
@@ -210,6 +210,8 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         self._library: EmojiLibrary = EmojiLibrary([])
         self._index: Optional[VectorIndex] = None
         self._sync_task: Optional[asyncio.Task[None]] = None
+        # 首次同步失败时给一条带排查方向的长提示，之后只留一行短日志
+        self._sync_failure_explained = False
 
     # ──── 生命周期 ────
 
@@ -533,7 +535,17 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self.ctx.logger.warning("表情向量同步异常，将在下一轮重试: %s", exc)
+                if not self._sync_failure_explained:
+                    self._sync_failure_explained = True
+                    self.ctx.logger.warning(
+                        "表情向量补算失败，向量兜底这一档暂时用不了：%s。"
+                        "请确认 model_config.toml 里给嵌入任务 %r 配了模型（对应 index.embedding_task），"
+                        "或者把 match.enable_vector / index.enabled 关掉，只用精确和本地两档。",
+                        exc,
+                        self.config.index.embedding_task,
+                    )
+                else:
+                    self.ctx.logger.warning("表情向量同步异常，将在下一轮重试: %s", exc)
             else:
                 if stats is not None and not stats.failed and (not stats.ready or stats.pending):
                     interval = self.config.index.bootstrap_interval_seconds
