@@ -171,8 +171,13 @@ class VectorIndex:
         for label, entry in raw_entries.items():
             if not isinstance(entry, dict):
                 continue
-            ts = float(entry.get("ts") or 0.0)
-            score = float(entry.get("score") or 0.0)
+            # 缓存文件是本地可手改的，坏值只丢这一条，不能让整个 load 抛错
+            try:
+                ts = float(entry.get("ts") or 0.0)
+                score = float(entry.get("score") or 0.0)
+            except (TypeError, ValueError):
+                self._log.warning("表情标签缓存条目损坏，已丢弃: %r", label)
+                continue
             emoji_hash = entry.get("hash")
             cache[str(label)] = (str(emoji_hash) if emoji_hash else None, score, ts)
         return cache
@@ -211,6 +216,14 @@ class VectorIndex:
 
     # ──── 同步 ────
 
+    def _invalidate_cache(self) -> None:
+        """表情库变了就清查询缓存，否则新表情对查过的标签一直不可见。"""
+
+        if not self._cache:
+            return
+        self._cache.clear()
+        self._cache_dirty = True
+
     async def sync(
         self,
         records: Sequence[Any],
@@ -236,6 +249,9 @@ class VectorIndex:
         removed = [emoji_hash for emoji_hash in self._items if emoji_hash not in target]
         for emoji_hash in removed:
             del self._items[emoji_hash]
+        if removed:
+            # 表情被删掉，缓存里可能还留着指向它的命中
+            self._invalidate_cache()
 
         pending = [
             (emoji_hash, text)
@@ -246,7 +262,7 @@ class VectorIndex:
             was_ready = self._ready
             self._ready = True
             # 就绪状态要立刻落盘：否则重启后得再等一轮同步才敢用向量兜底
-            if removed or not was_ready:
+            if removed or not was_ready or self._cache_dirty:
                 await self.flush()
             return SyncStats(added=0, removed=len(removed), pending=0, ready=True)
 
@@ -283,7 +299,10 @@ class VectorIndex:
                 self._items[emoji_hash] = {"d": text, "v": _pack_vector(_normalize_vector(vector))}
             added += len(chunk)
 
-        if not pending:
+        if added:
+            # 新补了向量，之前查过但没命中的标签要重新有机会命中
+            self._invalidate_cache()
+        if not pending and not failed:
             self._ready = True
         await self.flush()
         return SyncStats(added=added, removed=len(removed), pending=len(pending), failed=failed, ready=self._ready)

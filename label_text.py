@@ -16,8 +16,8 @@ import re
 TAG_KIND = "tag"
 TEXT_KIND = "text"
 
-# 支持中英文冒号、无描述的 [表情包]、以及标签里带空格的情况
-_TAG_PATTERN = re.compile(r"\[\s*表情包\s*(?:[:：]\s*([^\[\]]*?))?\s*\]")
+# 支持中英文冒号、无描述的 [表情包]、全角方括号，以及标签里带空格的情况
+_TAG_PATTERN = re.compile(r"[\[［]\s*表情包\s*(?:[:：]\s*([^\[\]［］]*?))?\s*[\]］]")
 _TAG_SPLIT_PATTERN = re.compile(r"[,，、/|]+")
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 

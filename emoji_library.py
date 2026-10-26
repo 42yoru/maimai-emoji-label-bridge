@@ -96,7 +96,12 @@ def has_char_overlap(label: str, description: str, min_grams: int = 1) -> bool:
 
     if min_grams <= 0:
         return True
-    return len(_char_grams(normalize_tag_text(label)) & _char_grams(normalize_tag_text(description))) >= min_grams
+    label_text = normalize_tag_text(label)
+    record_text = normalize_tag_text(description)
+    if min(len(label_text), len(record_text)) < 2:
+        # 单字切不出二元组，退化成字符集合比较，否则单字标签永远过不了这道门槛
+        return bool(set(label_text) & set(record_text))
+    return len(_char_grams(label_text) & _char_grams(record_text)) >= min_grams
 
 
 def _coverage_score(label_tags: Sequence[str], record_tags: Sequence[str]) -> float:
@@ -183,10 +188,13 @@ class EmojiLibrary:
 
         scored.sort(key=lambda item: item[0], reverse=True)
         best_score, best_record = scored[0]
-        for score, record in scored[:_REFINE_TOP_N]:
+        for _score, record in scored[:_REFINE_TOP_N]:
             ratio = SequenceMatcher(None, normalized, record.search_text).ratio()
-            if ratio * 0.9 > score:
-                best_score, best_record = ratio * 0.9, record
+            candidate_score = ratio * 0.9
+            # 只跟当前最优比：候选按覆盖度降序排列，若跟自己的分数比，
+            # 后面的低覆盖候选会凭一点点字面相似把前面更高分的记录顶掉
+            if candidate_score > best_score:
+                best_score, best_record = candidate_score, record
         if best_score < threshold:
             return None
         return MatchResult(record=best_record, score=best_score, stage=STAGE_LOCAL)

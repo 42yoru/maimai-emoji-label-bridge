@@ -91,6 +91,28 @@ class LocalMatchTest(TestCase):
         library = EmojiLibrary([_record("生气,愤怒,摔桌", "hash-a")])
         self.assertIsNone(library.match_local("亲亲,卖萌", threshold=0.5))
 
+    def test_refine_never_downgrades_best(self) -> None:
+        """difflib 复算只能往上抬，不能把覆盖度最高的记录换成更低的。"""
+
+        library = EmojiLibrary(
+            [
+                _record("亲亲,害羞", "hash-top"),
+                _record("生气，害羞", "hash-low"),
+            ]
+        )
+        match = library.match_local("亲亲,撒娇,害羞", threshold=0.3)
+        self.assertIsNotNone(match)
+        assert match is not None
+        self.assertEqual(match.record.emoji_hash, "hash-top")
+        # 复算后分数必须 >= 原始最高覆盖度，不能跌回低分候选
+        self.assertGreaterEqual(match.score, 0.6)
+
+    def test_char_overlap_supports_single_char_label(self) -> None:
+        """单字标签切不出二元组，也要能通过字面门槛。"""
+
+        self.assertTrue(has_char_overlap("喵", "喵喵叫的猫"))
+        self.assertFalse(has_char_overlap("喵", "生气摔桌"))
+
 
 class CandidateAndLookupTest(TestCase):
     """粗筛候选与 hash 回查。"""

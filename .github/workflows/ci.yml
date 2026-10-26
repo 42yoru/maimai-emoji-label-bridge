@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
       - uses: actions/checkout@v4
@@ -25,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install maibot-plugin-sdk ruff
+          pip install "maibot-plugin-sdk>=2.16.0,<3" "ruff>=0.8,<1"
 
       - name: Lint
         run: ruff check . --select E,F,W,B --line-length 130

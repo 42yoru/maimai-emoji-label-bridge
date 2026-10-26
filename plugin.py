@@ -59,7 +59,7 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_order__ = 0
 
     enabled: bool = Field(default=True, description="是否启用插件；关掉后发送链路完全不受影响")
-    config_version: str = Field(default="0.1.5", description="配置版本")
+    config_version: str = Field(default="0.1.6", description="配置版本")
 
 
 class BehaviorConfig(PluginConfigBase):
@@ -284,6 +284,11 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         modified_kwargs = dict(kwargs)
         new_message = dict(message)
         new_message["raw_message"] = new_components
+        plain_text = _render_plain_text(new_components)
+        if plain_text is not None:
+            # 宿主只在「引用回复」或该字段为空时重算，不主动写的话历史里会留下假标签
+            new_message["processed_plain_text"] = plain_text
+        new_message["is_emoji"] = _is_single_emoji(new_components)
         modified_kwargs["message"] = new_message
         return {"action": "continue", "modified_kwargs": modified_kwargs}
 
@@ -297,7 +302,7 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
             if component.get("type") != TEXT_COMPONENT:
                 continue
             text = str(component.get("data") or "")
-            if "表情包" in text and "[" in text:
+            if "表情包" in text and ("[" in text or "［" in text):
                 return True
         return False
 
@@ -310,7 +315,9 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
 
         text_piece_count = sum(1 for piece in pieces if piece.kind == TEXT_KIND and piece.text.strip())
         tag_piece_count = sum(1 for piece in pieces if piece.kind == TAG_KIND)
-        whole_message = text_piece_count == 0 and tag_piece_count == 1
+        has_raw_piece = any(piece.kind == RAW_KIND for piece in pieces)
+        # 只有「整条消息就一个标签、没有别的组件」才允许走向量兜底
+        whole_message = text_piece_count == 0 and tag_piece_count == 1 and not has_raw_piece
         has_existing_emoji = any(
             isinstance(component, dict) and component.get("type") == EMOJI_COMPONENT for component in components
         )
@@ -414,6 +421,9 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
             return None
         candidates = self._library.coarse_candidates(label, self.config.match.candidate_limit)
         if not candidates:
+            if self.config.match.require_char_overlap:
+                # 一个字符都对不上，字面门槛必然过不了，没必要再花一次嵌入
+                return None
             candidates = list(self._library.records)
         hit = await index.query(
             normalized,
@@ -582,9 +592,44 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         raw_results = result.get("results")
         if not isinstance(raw_results, list):
             raise RuntimeError("批量嵌入返回缺少 results")
-        vectors = [[float(value) for value in (item.get("embedding") or [])] for item in raw_results]
+        vectors: List[List[float]] = []
+        for index, item in enumerate(raw_results):
+            if not isinstance(item, dict):
+                raise RuntimeError(f"批量嵌入第 {index} 条结果不是对象: {type(item).__name__}")
+            vectors.append([float(value) for value in (item.get("embedding") or [])])
         model_name = str((raw_results[0].get("model_name") if raw_results else "") or "")
         return vectors, model_name
+
+
+def _render_plain_text(components: Sequence[Any]) -> Optional[str]:
+    """按重建后的组件拼可见纯文本，让历史里不再留假标签。
+
+    只在「所有组件都是文字或表情」时才接管：at / reply / image 这些宿主有自己的拼法，
+    硬拼会把别的组件丢掉。宿主也只在引用回复或该字段为空时才重算，
+    所以这里不主动写的话，`processed_plain_text` 会一直是带假标签的原文。
+    """
+
+    parts: List[str] = []
+    for component in components:
+        if not isinstance(component, dict):
+            return None
+        component_type = component.get("type")
+        if component_type in (TEXT_COMPONENT, EMOJI_COMPONENT):
+            parts.append(str(component.get("data") or ""))
+            continue
+        return None
+    text = "".join(parts).strip()
+    return text or None
+
+
+def _is_single_emoji(components: Sequence[Any]) -> bool:
+    """整条消息只有一个表情组件时，宿主才会把它当表情消息落库。"""
+
+    return (
+        len(components) == 1
+        and isinstance(components[0], dict)
+        and components[0].get("type") == EMOJI_COMPONENT
+    )
 
 
 def create_plugin() -> EmojiLabelBridgePlugin:

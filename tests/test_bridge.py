@@ -158,11 +158,63 @@ class HookTest(_BridgeTestBase):
         )
 
         self.assertEqual(result["action"], "continue")
-        components = result["modified_kwargs"]["message"]["raw_message"]
+        message = result["modified_kwargs"]["message"]
+        components = message["raw_message"]
         self.assertEqual(
             components,
             [{"type": "emoji", "data": "[表情包: 亲亲,卖萌,害羞,撒娇,喜爱]", "hash": "hash-real"}],
         )
+        # 整条消息只剩一个表情：宿主才会按表情消息落库
+        self.assertTrue(message["is_emoji"])
+        # 历史里的纯文本也要换成真表情的渲染格式，不能留着假标签
+        self.assertEqual(message["processed_plain_text"], "[表情包: 亲亲,卖萌,害羞,撒娇,喜爱]")
+
+    async def test_mixed_message_is_not_marked_as_emoji(self) -> None:
+        """正文里夹表情的混合消息，is_emoji 要保持 False，但假标签仍要被换掉。"""
+
+        record = _record("害羞", "hash-real")
+        plugin = _build_plugin(self.data_dir)
+        plugin._library = EmojiLibrary([record])
+
+        result = await plugin.bridge_after_build_message(
+            message=_make_message(_text("好呀[表情包: 害羞]")),
+            stream_id="s-1",
+        )
+
+        message = result["modified_kwargs"]["message"]
+        self.assertFalse(message["is_emoji"])
+        self.assertEqual(message["raw_message"][0]["data"], "好呀")
+        self.assertEqual(message["raw_message"][1]["type"], "emoji")
+
+    async def test_plain_text_untouched_when_at_present(self) -> None:
+        """带 at 组件的消息不接管 processed_plain_text，交给宿主自己拼。"""
+
+        record = _record("害羞", "hash-real")
+        plugin = _build_plugin(self.data_dir)
+        plugin._library = EmojiLibrary([record])
+        message = _make_message(_text("[表情包: 害羞]"), {"type": "at", "data": "123456"})
+        message["processed_plain_text"] = "原文"
+
+        result = await plugin.bridge_after_build_message(message=message, stream_id="s-1")
+
+        self.assertEqual(result["modified_kwargs"]["message"]["processed_plain_text"], "原文")
+
+    async def test_fullwidth_brackets_are_supported(self) -> None:
+        """全角方括号写法的假标签也要能接住。"""
+
+        record = _record("害羞", "hash-real")
+        plugin = _build_plugin(self.data_dir)
+        plugin._library = EmojiLibrary([record])
+
+        result = await plugin.bridge_after_build_message(
+            message=_make_message(_text("［表情包: 害羞］")),
+            stream_id="s-1",
+        )
+
+        self.assertEqual(result["action"], "continue")
+        components = result["modified_kwargs"]["message"]["raw_message"]
+        self.assertEqual(components[0]["type"], "emoji")
+        self.assertEqual(components[0]["hash"], "hash-real")
 
     async def test_local_tag_becomes_emoji(self) -> None:
         """标签部分重叠也能命中本地档。"""
@@ -342,7 +394,8 @@ class VectorTest(_BridgeTestBase):
         )
 
         self.assertEqual(result, {"action": "abort"})
-        self.assertEqual(embedder.text_calls, ["摸摸头"])
+        # 一个字符都对不上，字面门槛必然过不了：连嵌入都不该请求
+        self.assertEqual(embedder.text_calls, [])
 
     async def test_vector_char_overlap_disabled(self) -> None:
         """关掉字面门槛后，同样的输入就允许向量命中。"""
