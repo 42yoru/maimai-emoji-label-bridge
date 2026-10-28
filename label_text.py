@@ -83,12 +83,6 @@ def parse_segments(text: str) -> List[ParsedSegment]:
     return segments
 
 
-def has_tag(text: str) -> bool:
-    """判断一段正文里是否包含表情标签。"""
-
-    return bool(_TAG_PATTERN.search(str(text or "")))
-
-
 
 def build_tag_text(description: str) -> str:
     """按宿主入站表情的渲染格式构造表情组件的可见文本。"""

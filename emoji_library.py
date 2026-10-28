@@ -140,8 +140,11 @@ class EmojiLibrary:
         self._records: Tuple[EmojiRecord, ...] = tuple(records)
         self._exact_index: Dict[str, EmojiRecord] = {}
         self._tag_index: Dict[str, EmojiRecord] = {}
+        # 向量命中后要按 hash 回查记录，次数与命中数同阶；线性扫 591 条不划算
+        self._by_hash: Dict[str, EmojiRecord] = {}
         for record in self._records:
             self._exact_index.setdefault(record.search_text, record)
+            self._by_hash.setdefault(record.emoji_hash, record)
             for tag in record.tags:
                 self._tag_index.setdefault(tag.casefold(), record)
 
@@ -163,10 +166,7 @@ class EmojiLibrary:
         normalized = str(emoji_hash or "").strip()
         if not normalized:
             return None
-        for record in self._records:
-            if record.emoji_hash == normalized:
-                return record
-        return None
+        return self._by_hash.get(normalized)
 
     def match_exact(self, label: str) -> Optional[MatchResult]:
         """按描述全文或单标签做精确命中。"""

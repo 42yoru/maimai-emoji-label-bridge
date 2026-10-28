@@ -46,7 +46,7 @@
 
 ### 阈值是实测校准的
 
-在约 570 张表情、`nemotron-3-embed-1b`（2048 维）的库上跑出来：
+在约 590 张表情、`nemotron-3-embed-1b`（2048 维）的库上跑出来：
 
 | 标签 | 余弦 | 结果 |
 | --- | --- | --- |
@@ -61,11 +61,11 @@
 
 ## 向量索引怎么维护
 
-- 索引文件：`<插件数据目录>/emoji_vectors.json`，每条向量是单位化 float32 + base64，约 570 张表情共 6.0MB 上下；
+- 索引文件：`<插件数据目录>/emoji_vectors.json`，每条向量是单位化 float32 + base64，约 590 张表情共 6.5MB 上下（体积随维度线性变，换模型要重新估）；
 - 缓存文件：`<插件数据目录>/label_cache.json`，标签 → 命中结果（含未命中），重复标签零网络开销；
 - 数据源：只查宿主的 `images` 表（emoji、已注册、未封禁、文件存在），只取 hash 与描述，不拉图片；
 - 脏描述会被过滤：以 `[`/`【` 开头或带 `<|` 之类特殊 token 的描述不参与匹配；
-- 首次同步：加载 `startup_delay_seconds` 秒后开始，每批 `batch_size` 条、并发 `max_concurrent`，每轮最多补 `max_items_per_sync` 条；没补齐时按 `bootstrap_interval_seconds`（默认 5 秒）连续推进，570 条约 2.5 分钟建完；
+- 首次同步：加载 `startup_delay_seconds` 秒后开始，每批 `batch_size` 条、并发 `max_concurrent`，每轮最多补 `max_items_per_sync` 条；没补齐时按 `bootstrap_interval_seconds`（默认 5 秒）连续推进，590 条约 2.5 分钟建完；
 - 增量补录：每 `sync_interval_seconds`（默认 10 分钟）对一次清单，新增/移除/描述变化按 diff 处理——**新收录表情后的补向量就在这一轮**；
 - 就绪状态落盘（`complete` 字段），重启直接恢复；
 - 换嵌入模型或维度变化时整库重建；
@@ -90,6 +90,8 @@
 4. 在 WebUI 插件页确认已启用。首次启动约 30 秒后开始建向量索引，期间精确/本地两档已可用。
 
 > **嵌入模型依赖**：向量兜底需要宿主在 `model_config.toml` 里配好 `[model_task_config.embedding]`。没配或调用失败时，插件自动只走「精确 + 本地」两档，不影响发送，也不会输出错误的表情。
+
+**数据流向**：同步期会把每条表情的描述文本、发送期会把被兜底的标签文本，经宿主的 `llm.embed` 能力发往 `model_config.toml` 里 `model_task_config.embedding` 指向的模型服务；不发送图片二进制，也不发送聊天记录。把 `index.enabled=false` 可以完全关掉这条出站。
 
 ## 配置
 
@@ -127,6 +129,6 @@
 | 项 | 值 |
 | --- | --- |
 | 插件 ID | `github.42yoru.maimai-emoji-label-bridge` |
-| 版本 | 0.1.11 |
+| 版本 | 0.1.12 |
 | 仓库 | <https://github.com/42yoru/maimai-emoji-label-bridge> |
 | 许可证 | MIT |

@@ -65,7 +65,8 @@ class ConfigSchemaTest(TestCase):
 
         field = self.schema["sections"]["behavior"]["fields"]["miss_policy"]
         self.assertEqual(field["choices"], ["drop", "keep", "abort"])
-        self.assertEqual(field["widget"], "select")
+        # 宿主只渲染 ui_type（由 SDK 按 Literal 生成），widget 是没人消费的键
+        self.assertEqual(field["ui_type"], "select")
 
     def test_config_version_is_disabled(self) -> None:
         """配置版本由插件维护，页面上置灰。"""

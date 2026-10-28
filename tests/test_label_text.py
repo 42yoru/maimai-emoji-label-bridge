@@ -8,7 +8,6 @@ from emoji_label_bridge.label_text import (
     TAG_KIND,
     TEXT_KIND,
     build_tag_text,
-    has_tag,
     normalize_tag_text,
     parse_segments,
     split_tags,
@@ -73,9 +72,3 @@ class LabelTextTest(TestCase):
 
         self.assertEqual(build_tag_text("亲亲"), "[表情包: 亲亲]")
         self.assertEqual(build_tag_text(""), "[表情包]")
-
-    def test_has_tag(self) -> None:
-        """快速判断函数要覆盖有无标签两种情况。"""
-
-        self.assertTrue(has_tag("这里有[表情包: 害羞]"))
-        self.assertFalse(has_tag("这里没有标签"))

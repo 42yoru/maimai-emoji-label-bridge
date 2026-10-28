@@ -139,9 +139,11 @@ class VectorIndex:
             self._log.warning("表情向量索引读取失败，将重建: %s", exc)
             return {}, "", 0, False
         if not isinstance(payload, dict) or payload.get("version") != INDEX_VERSION:
+            self._quarantine_index("版本不符或顶层不是对象")
             return {}, "", 0, False
         raw_items = payload.get("items")
         if not isinstance(raw_items, dict):
+            self._quarantine_index("items 字段缺失或不是对象")
             return {}, "", 0, False
         items: Dict[str, Dict[str, Any]] = {}
         for emoji_hash, item in raw_items.items():
@@ -153,6 +155,16 @@ class VectorIndex:
             items[str(emoji_hash)] = item
         complete = bool(payload.get("complete")) and bool(items)
         return items, str(payload.get("model") or ""), int(payload.get("dim") or 0), complete
+
+    def _quarantine_index(self, reason: str) -> None:
+        """把损坏/版本不符的索引挪到 .bad 并留日志，别静默丢掉。"""
+
+        self._log.warning("表情向量索引不可用（%s），已重建；旧文件备份为 %s.bad", reason, self._index_path)
+        try:
+            backup = self._index_path.with_suffix(self._index_path.suffix + ".bad")
+            self._index_path.replace(backup)
+        except OSError as exc:
+            self._log.warning("备份损坏索引失败，直接重建: %s", exc)
 
     def _load_cache_file(self) -> "OrderedDict[str, Tuple[Optional[str], float, float]]":
         if not self._cache_path.exists():

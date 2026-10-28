@@ -23,11 +23,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
-import asyncio
-import time
-
 from maibot_sdk import Field, HookHandler, MaiBotPlugin, PluginConfigBase
 from maibot_sdk.types import ErrorPolicy, HookMode, HookOrder
+
+import asyncio
+import time
 
 from .config_ui import build_config_ui_schema
 from .emoji_library import EmojiLibrary, EmojiRecord, build_records, has_char_overlap
@@ -70,7 +70,7 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_order__ = 0
 
     enabled: bool = Field(default=True, description="是否启用插件；关掉后发送链路完全不受影响")
-    config_version: str = Field(default="0.1.11", description="配置版本")
+    config_version: str = Field(default="0.1.12", description="配置版本")
 
 
 class BehaviorConfig(PluginConfigBase):
@@ -236,7 +236,7 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
     async def on_load(self) -> None:
         """加载插件：读取索引、拉取表情清单并启动后台增量同步。"""
 
-        self._rebuild_runtime()
+        await self._rebuild_runtime()
         loaded = await self._refresh_library()
         self._start_library_task()
         self._start_sync_task()
@@ -270,7 +270,7 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         # 重建索引对象前先把旧的脏缓存落盘，否则每次改配置都会白丢最近的标签缓存
         if self._index is not None:
             await self._index.flush()
-        self._rebuild_runtime()
+        await self._rebuild_runtime()
         await self._refresh_library()
         self._start_library_task()
         self._start_sync_task()
@@ -521,7 +521,7 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
 
     # ──── 索引与嵌入 ────
 
-    def _rebuild_runtime(self) -> None:
+    async def _rebuild_runtime(self) -> None:
         """按当前配置重建索引对象与表情库（不触发网络）。"""
 
         data_dir = self.ctx.paths.data_dir
@@ -531,7 +531,9 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
             description_max_chars=self.config.index.description_max_chars,
             logger_=self.ctx.logger,
         )
-        self._index.load()
+        # 索引是 ~6MB JSON，同步解析会直接卡住事件循环；加载/热更新都在 async 上下文里，
+        # 所以放进线程跑
+        await asyncio.to_thread(self._index.load)
 
     async def _refresh_library(self) -> bool:
         """从宿主数据库重新读取表情清单。"""

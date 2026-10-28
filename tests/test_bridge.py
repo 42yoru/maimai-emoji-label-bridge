@@ -732,3 +732,17 @@ class EmbedContractTest(_BridgeTestBase):
         plugin.ctx.llm = SimpleNamespace(embed=bad_embed)
         with self.assertRaises(RuntimeError):
             await plugin._embed_texts(["害羞"], 2)
+
+
+class IndexQuarantineTest(_BridgeTestBase):
+    """损坏的索引要留痕并备份，不能静默丢掉。"""
+
+    def test_corrupt_index_is_backed_up(self) -> None:
+        index_path = self.data_dir / "emoji_vectors.json"
+        index_path.write_text('{"version": 999, "items": {}}', encoding="utf-8")
+        index = VectorIndex(index_path, self.data_dir / "label_cache.json", logger_=LOGGER)
+
+        index.load()
+
+        self.assertEqual(index.size, 0)
+        self.assertTrue(Path(str(index_path) + ".bad").exists())

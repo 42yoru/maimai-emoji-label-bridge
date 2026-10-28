@@ -143,7 +143,6 @@ def _build_field(path: str, template: Dict[str, Any], label: str, order: int) ->
         entry["disabled"] = True
     if path in _CHOICES:
         entry["choices"] = list(_CHOICES[path])
-        entry["widget"] = "select"
     return entry
 
 
