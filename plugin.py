@@ -59,7 +59,7 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_order__ = 0
 
     enabled: bool = Field(default=True, description="是否启用插件；关掉后发送链路完全不受影响")
-    config_version: str = Field(default="0.1.7", description="配置版本")
+    config_version: str = Field(default="0.1.8", description="配置版本")
 
 
 class BehaviorConfig(PluginConfigBase):

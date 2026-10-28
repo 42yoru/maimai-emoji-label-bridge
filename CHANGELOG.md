@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.8
+
+### 细节
+
+- manifest：`sdk` 区间下界由 `2.16.0` 放宽到 `2.12.0`——`HookHandler(timeout_ms=/error_policy=)`、
+  `ctx.llm.embed(text=/texts=/max_concurrent=)`、`ctx.db.query(...)`、`HookMode/HookOrder/ErrorPolicy`
+  在 2.12.0 与 2.19.0 上逐项核对过，签名完全一致
+- README 的版本表与 `config.toml` / `config.toml.example` 的 `config_version` 同步
+
 ## 0.1.7
 
 ### 细节
