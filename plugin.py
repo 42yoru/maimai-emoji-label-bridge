@@ -70,7 +70,7 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_order__ = 0
 
     enabled: bool = Field(default=True, description="是否启用插件；关掉后发送链路完全不受影响")
-    config_version: str = Field(default="0.1.10", description="配置版本")
+    config_version: str = Field(default="0.1.11", description="配置版本")
 
 
 class BehaviorConfig(PluginConfigBase):
@@ -537,7 +537,11 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         """从宿主数据库重新读取表情清单。"""
 
         try:
-            rows = await self.ctx.db.query(EMOJI_INDEX_DB_MODEL, filters=EMOJI_INDEX_FILTERS)
+            # order_by 固定下来：描述完全相同的两张表情由 SQLite 返回顺序决定谁赢，
+            # 不排序的话同一标签在重启后可能换成另一张
+            rows = await self.ctx.db.query(
+                EMOJI_INDEX_DB_MODEL, filters=EMOJI_INDEX_FILTERS, order_by=["id"]
+            )
         except Exception as exc:
             self.ctx.logger.warning("表情库读取失败: %s", exc)
             return False

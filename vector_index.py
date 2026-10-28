@@ -330,6 +330,9 @@ class VectorIndex:
         if cached is not None:
             emoji_hash, score, _ = cached
             self._cache.move_to_end(label)
+            # 缓存里存的是"当时的最佳候选 + 分数"，命中与否用**当前**阈值判断：
+            # 以前未命中会存成 (None, 0)，用户把 vector_threshold 调低后仍然取不到，
+            # 得等缓存 TTL（默认 7 天）过期才生效。
             if not emoji_hash or score < threshold:
                 return None
             return VectorHit(emoji_hash=emoji_hash, score=score)
@@ -367,8 +370,12 @@ class VectorIndex:
                 best_score = score
                 best_hash = str(record.emoji_hash)
 
-        if best_score < threshold or not best_hash:
-            self._remember(label, None, best_score if best_score > -1.0 else 0.0, cache_size)
+        if not best_hash:
+            self._remember(label, None, 0.0, cache_size)
+            return None
+        if best_score < threshold:
+            # 分数低于阈值也把最佳候选记下来，阈值门槛在读取缓存时再判
+            self._remember(label, best_hash, best_score, cache_size)
             return None
         self._remember(label, best_hash, best_score, cache_size)
         return VectorHit(emoji_hash=best_hash, score=best_score)

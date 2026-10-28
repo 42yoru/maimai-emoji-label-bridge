@@ -670,6 +670,46 @@ class VectorBudgetTest(_BridgeTestBase):
         self.assertLessEqual(seen[0], plugin.config.match.vector_timeout_ms)
 
 
+class CacheThresholdTest(_BridgeTestBase):
+    """缓存里存最佳候选、按当前阈值判定，改配置后立刻生效。"""
+
+    async def test_lowering_threshold_uses_cached_candidate(self) -> None:
+        """首次按高阈值未命中，把阈值调低后不该再等缓存过期。"""
+
+        records = [_record("摸头杀前置帧", "hash-a")]
+        plugin, embedder = await _build_indexed_plugin(self.data_dir, records)
+        index = plugin._index
+        self.assertIsNotNone(index)
+        candidates = plugin._library.coarse_candidates("摸摸头", 50)
+
+        first = await index.query(
+            "摸摸头",
+            candidates,
+            plugin._embed_text,
+            threshold=2.0,
+            timeout_ms=1000,
+            cache_ttl_seconds=3600,
+            cache_size=16,
+        )
+        self.assertIsNone(first)
+        self.assertEqual(embedder.text_calls, ["摸摸头"])
+
+        second = await index.query(
+            "摸摸头",
+            candidates,
+            plugin._embed_text,
+            threshold=0.5,
+            timeout_ms=1000,
+            cache_ttl_seconds=3600,
+            cache_size=16,
+        )
+
+        self.assertIsNotNone(second)
+        self.assertEqual(second.emoji_hash, "hash-a")
+        # 关键：没有再次请求嵌入，说明用的是缓存里的候选；以前未命中存成 (None, 0) 就取不到了
+        self.assertEqual(embedder.text_calls, ["摸摸头"])
+
+
 class EmbedContractTest(_BridgeTestBase):
     """嵌入返回缺字段是硬错误，不能降级成空向量当"未命中"。"""
 

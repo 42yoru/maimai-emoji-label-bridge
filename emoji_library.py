@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple
 
 from .label_text import normalize_tag_text, split_tags
 
@@ -29,6 +29,18 @@ class EmojiRecord:
     description: str
     tags: Tuple[str, ...]
     search_text: str
+    grams: FrozenSet[str] = frozenset()
+    """描述文本的字符 gram，构建时算一次。
+
+    ``coarse_candidates`` 每次查询都会拿它做交集；放在查询里现算的话，591 条记录
+    就是每次查询重建 591 个 set，而且发生在出站 hook 的正前面。
+    """
+
+    def __post_init__(self) -> None:
+        """没显式给 grams 时按 search_text 补算，保证任何构造方式都拿到可用值。"""
+
+        if not self.grams and self.search_text:
+            object.__setattr__(self, "grams", _char_grams(self.search_text))
 
 
 @dataclass(frozen=True)
@@ -76,12 +88,14 @@ def build_records(rows: Iterable[Dict[str, Any]]) -> List[EmojiRecord]:
         tags = split_tags(description)
         if not tags:
             continue
+        search_text = normalize_tag_text(description)
         records.append(
             EmojiRecord(
                 emoji_hash=emoji_hash,
                 description=description,
                 tags=tags,
-                search_text=normalize_tag_text(description),
+                search_text=search_text,
+                grams=_char_grams(search_text),
             )
         )
     return records
@@ -213,7 +227,8 @@ class EmojiLibrary:
             return []
         scored: List[Tuple[int, EmojiRecord]] = []
         for record in self._records:
-            overlap = len(label_grams & _char_grams(record.search_text))
+            # grams 在 EmojiRecord 构建时就算好了，这里不再每次重建 set
+            overlap = len(label_grams & record.grams)
             if overlap:
                 scored.append((overlap, record))
         if not scored:
