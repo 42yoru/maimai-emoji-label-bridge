@@ -1,6 +1,6 @@
 [plugin]
 enabled = true
-config_version = "0.1.8"
+config_version = "0.1.9"
 
 [behavior]
 # 匹配不到表情时怎么办：
@@ -36,6 +36,9 @@ enabled = true
 embedding_task = "embedding"
 # 增量同步间隔：新收录的表情会在下一轮同步里补向量
 sync_interval_seconds = 600
+# 表情清单刷新间隔（秒）：与向量索引无关，index.enabled=false 时也照常刷新；
+# 新收录的表情在这一轮之后才能被精确/本地匹配到，已删除的表情也会在这一轮被摘掉
+library_refresh_seconds = 60
 # 插件加载后延迟多久开始首次同步（秒），避开启动高峰
 startup_delay_seconds = 30
 # 索引尚未补齐时的轮询间隔（秒）；补齐后改按 sync_interval_seconds 周期同步

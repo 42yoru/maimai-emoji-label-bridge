@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 import asyncio
+import time
 
 from maibot_sdk import Field, HookHandler, MaiBotPlugin, PluginConfigBase
 from maibot_sdk.types import ErrorPolicy, HookMode, HookOrder
@@ -47,6 +48,13 @@ EMOJI_INDEX_FILTERS: Dict[str, Any] = {
     "is_banned": False,
 }
 RAW_KIND = "raw"
+
+VECTOR_TOTAL_BUDGET_MS = 4000
+"""一次 Hook 调用里所有标签共用的向量兜底总预算（毫秒）。
+
+Hook 自身超时是 5000ms，超时后宿主会丢弃整个 modified_kwargs（假标签原样发出）并计入熔断；
+`match.vector_timeout_ms` 只管单次嵌入，多个标签串行时会叠加，所以必须再加一层总预算。
+"""
 TEXT_COMPONENT = "text"
 EMOJI_COMPONENT = "emoji"
 
@@ -59,7 +67,7 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_order__ = 0
 
     enabled: bool = Field(default=True, description="是否启用插件；关掉后发送链路完全不受影响")
-    config_version: str = Field(default="0.1.8", description="配置版本")
+    config_version: str = Field(default="0.1.9", description="配置版本")
 
 
 class BehaviorConfig(PluginConfigBase):
@@ -142,6 +150,12 @@ class IndexConfig(PluginConfigBase):
         le=86400,
         description="增量同步间隔（秒）：新收录的表情会在下一轮同步里补向量",
     )
+    library_refresh_seconds: int = Field(
+        default=60,
+        ge=10,
+        le=3600,
+        description="表情清单刷新间隔（秒）；与向量索引无关，index.enabled=false 时也照常刷新",
+    )
     startup_delay_seconds: int = Field(
         default=30,
         ge=0,
@@ -210,6 +224,7 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         self._library: EmojiLibrary = EmojiLibrary([])
         self._index: Optional[VectorIndex] = None
         self._sync_task: Optional[asyncio.Task[None]] = None
+        self._library_task: Optional[asyncio.Task[None]] = None
         # 首次同步失败时给一条带排查方向的长提示，之后只留一行短日志
         self._sync_failure_explained = False
 
@@ -220,6 +235,7 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
 
         self._rebuild_runtime()
         loaded = await self._refresh_library()
+        self._start_library_task()
         self._start_sync_task()
         self.ctx.logger.info(
             "表情标签桥接已加载: 表情库=%s 条, 向量=%s 条, 已就绪=%s, 向量兜底=%s, 未命中策略=%s",
@@ -235,6 +251,7 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
     async def on_unload(self) -> None:
         """卸载插件：停掉同步任务并落盘索引。"""
 
+        await self._stop_library_task()
         await self._stop_sync_task()
         if self._index is not None:
             await self._index.flush()
@@ -245,9 +262,14 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         del config_data
         if scope != "self":
             return
+        await self._stop_library_task()
         await self._stop_sync_task()
+        # 重建索引对象前先把旧的脏缓存落盘，否则每次改配置都会白丢最近的标签缓存
+        if self._index is not None:
+            await self._index.flush()
         self._rebuild_runtime()
         await self._refresh_library()
+        self._start_library_task()
         self._start_sync_task()
         self.ctx.logger.info("表情标签桥接配置已更新: version=%s", version)
 
@@ -329,6 +351,9 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         result: List[Dict[str, Any]] = []
         pending_text: List[str] = []
         handled_tags = 0
+        # 整轮向量预算：Hook 超时（5000ms）一到，宿主会丢弃整份 modified_kwargs 并计入熔断，
+        # 所以宁可让后面的标签按未命中处理，也不能让串行的多次嵌入把 Hook 拖爆。
+        deadline = time.monotonic() + VECTOR_TOTAL_BUDGET_MS / 1000
 
         def flush_text() -> None:
             """把累计的文字片段合成一个组件。"""
@@ -356,7 +381,20 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
             if has_existing_emoji and settings.dedupe_with_existing_emoji:
                 continue
 
-            record = await self._resolve_tag(piece.text, whole_message=whole_message)
+            remaining_ms = int((deadline - time.monotonic()) * 1000)
+            if remaining_ms <= 0:
+                self.ctx.logger.warning(
+                    "向量兜底总预算 %sms 已用完，余下标签按未命中处理: label=%s",
+                    VECTOR_TOTAL_BUDGET_MS,
+                    piece.text[:40],
+                )
+                record = None
+            else:
+                record = await self._resolve_tag(
+                    piece.text,
+                    whole_message=whole_message,
+                    timeout_ms=remaining_ms,
+                )
             if record is not None:
                 flush_text()
                 result.append(
@@ -401,8 +439,20 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
 
     # ──── 匹配 ────
 
-    async def _resolve_tag(self, label: str, *, whole_message: bool) -> Optional[EmojiRecord]:
-        """按精确 → 本地 → 向量三档顺序解析标签。"""
+    async def _resolve_tag(
+        self,
+        label: str,
+        *,
+        whole_message: bool,
+        timeout_ms: Optional[int] = None,
+    ) -> Optional[EmojiRecord]:
+        """按精确 → 本地 → 向量三档顺序解析标签。
+
+        Args:
+            label: 标签文本。
+            whole_message: 整条消息是否只有一个标签（决定能否走向量兜底）。
+            timeout_ms: 本次嵌入允许的时间；调用方按整轮总预算逐标签扣减后传入。
+        """
 
         normalized = normalize_tag_text(label)
         if not normalized:
@@ -432,7 +482,9 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
             candidates,
             self._embed_text,
             threshold=self.config.match.vector_threshold,
-            timeout_ms=self.config.match.vector_timeout_ms,
+            timeout_ms=min(timeout_ms, self.config.match.vector_timeout_ms)
+            if timeout_ms is not None
+            else self.config.match.vector_timeout_ms,
             cache_ttl_seconds=self.config.index.cache_ttl_seconds,
             cache_size=self.config.index.cache_size,
         )
@@ -506,6 +558,44 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
             return
         self._sync_task = asyncio.create_task(self._sync_loop(), name="emoji_label_bridge_sync")
 
+    def _start_library_task(self) -> None:
+        """启动表情清单刷新任务。
+
+        这件事必须独立于向量同步：`index.enabled=false` 是 README 推荐的「没有嵌入模型也能用」
+        模式，那种模式下如果清单只读一次，新收录的表情永远匹配不到、已删除的表情还留在内存里，
+        命中已删表情时宿主 `load_emoji_binary` 会抛 ValueError，整条回复发不出去。
+        """
+
+        self._library_task = asyncio.create_task(self._library_loop(), name="emoji_label_bridge_library")
+
+    async def _stop_library_task(self) -> None:
+        """停止表情清单刷新任务。"""
+
+        task = self._library_task
+        self._library_task = None
+        if task is None or task.done():
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            if not task.cancelled():
+                # 是我们自己被取消，而不是我们取消的那个任务结束，照常往上抛
+                raise
+
+    async def _library_loop(self) -> None:
+        """按 ``index.library_refresh_seconds`` 周期重读表情清单（与向量索引无关）。"""
+
+        while True:
+            await asyncio.sleep(self.config.index.library_refresh_seconds)
+            try:
+                await self._refresh_library()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                # 清单长期不更新会让新表情接不上、旧表情指向已删文件，所以用 error 而不是 warning
+                self.ctx.logger.error("表情清单刷新失败，沿用上一次的 %s 条: %s", self._library.size, exc)
+
     async def _stop_sync_task(self) -> None:
         """停止后台同步任务。"""
 
@@ -517,7 +607,8 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         try:
             await task
         except asyncio.CancelledError:
-            pass
+            if not task.cancelled():
+                raise
 
     async def _sync_loop(self) -> None:
         """按自适应间隔补算表情向量。
@@ -557,9 +648,10 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         index = self._index
         if index is None:
             return None
-        refreshed = await self._refresh_library()
-        if not refreshed:
-            return None
+        if self._library.size == 0:
+            # 清单正常情况下由 _library_loop 刷新；这里是首轮读取失败后的兜底补读
+            if not await self._refresh_library():
+                return None
         stats = await index.sync(
             self._library.records,
             self._embed_texts,

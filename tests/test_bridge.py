@@ -14,6 +14,7 @@ from unittest import IsolatedAsyncioTestCase
 import logging
 import tempfile
 
+from emoji_label_bridge import plugin as plugin_module
 from emoji_label_bridge.emoji_library import EmojiLibrary, EmojiRecord
 from emoji_label_bridge.label_text import normalize_tag_text, split_tags
 from emoji_label_bridge.plugin import EmojiLabelBridgePlugin
@@ -585,3 +586,76 @@ class LibraryRefreshTest(_BridgeTestBase):
         self.assertTrue(refreshed)
         self.assertEqual(plugin._library.size, 0)
         self.assertTrue(any("0 条可用表情" in line for line in captured.output), captured.output)
+
+
+class LifecycleTest(_BridgeTestBase):
+    """后台循环的启停关系。
+
+    清单刷新必须独立于向量索引：`index.enabled=false` 是 README 推荐的「没有嵌入模型也能用」
+    模式，那种模式下如果清单只读一次，新表情永远匹配不到、已删表情还留在内存里。
+    """
+
+    async def test_library_task_starts_when_vector_index_disabled(self) -> None:
+        plugin = _build_plugin(self.data_dir, index={"enabled": False})
+        plugin._start_sync_task()
+        plugin._start_library_task()
+        try:
+            self.assertIsNone(plugin._sync_task)
+            self.assertIsNotNone(plugin._library_task)
+        finally:
+            await plugin._stop_library_task()
+
+    async def test_stop_tasks_clears_handles(self) -> None:
+        plugin = _build_plugin(self.data_dir, index={"enabled": True})
+        plugin._start_sync_task()
+        plugin._start_library_task()
+
+        await plugin._stop_library_task()
+        await plugin._stop_sync_task()
+
+        self.assertIsNone(plugin._library_task)
+        self.assertIsNone(plugin._sync_task)
+
+
+class VectorBudgetTest(_BridgeTestBase):
+    """整轮向量预算：宁可按未命中处理，也不能让 Hook 超时。"""
+
+    async def test_budget_exhausted_sends_no_embedding(self) -> None:
+        records = [_record("摸头杀前置帧", "hash-a")]
+        plugin, embedder = await _build_indexed_plugin(self.data_dir, records)
+
+        original = plugin_module.VECTOR_TOTAL_BUDGET_MS
+        plugin_module.VECTOR_TOTAL_BUDGET_MS = 0
+        try:
+            result = await plugin.bridge_after_build_message(
+                message=_make_message(_text("[表情包: 摸摸头]")),
+                stream_id="s-1",
+            )
+        finally:
+            plugin_module.VECTOR_TOTAL_BUDGET_MS = original
+
+        # 预算为 0 时一次嵌入都不发：默认 miss_policy=drop，整条只剩标签 → abort
+        self.assertEqual(embedder.text_calls, [])
+        self.assertEqual(result, {"action": "abort"})
+
+    async def test_remaining_budget_caps_single_embed_timeout(self) -> None:
+        """单次嵌入的超时会被剩余预算压住，不超过配置上限。"""
+
+        records = [_record("摸头杀前置帧", "hash-a")]
+        plugin, _ = await _build_indexed_plugin(self.data_dir, records)
+        self.assertIsNotNone(plugin._index)
+
+        seen: List[int] = []
+
+        async def fake_query(_text: str, _candidates: Any, _embed: Any, **kwargs: Any) -> Any:
+            seen.append(int(kwargs["timeout_ms"]))
+            return None
+
+        plugin._index = SimpleNamespace(query=fake_query, ready=True, size=1)  # type: ignore[assignment]
+        await plugin.bridge_after_build_message(
+            message=_make_message(_text("[表情包: 摸摸头]")),
+            stream_id="s-1",
+        )
+
+        self.assertEqual(len(seen), 1)
+        self.assertLessEqual(seen[0], plugin.config.match.vector_timeout_ms)

@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.9
+
+### 修复
+
+- **多标签 + 向量兜底会超出 Hook 5000ms 超时**：`vector_timeout_ms` 只管单次嵌入，关掉
+  `match.only_whole_message` 后每个标签各走一次（上限 4000ms × 最多 3 个标签），串行叠加必然超时。
+  宿主超时后会丢弃**整份** `modified_kwargs`（假标签原样发出）并按熔断计数（3 次即停用 60~300s）。
+  现在给一次 Hook 调用加整轮总预算 `VECTOR_TOTAL_BUDGET_MS = 4000`，逐标签扣减剩余时间，
+  预算用完的标签直接按未命中处理
+- **表情清单只在向量同步里刷新**：`index.enabled=false`（README 推荐的「没有嵌入模型也能用」模式）
+  时 `_start_sync_task` 直接返回，`_refresh_library` 此后永不调用 —— 新收录的表情永远匹配不到，
+  已删除的表情还留在内存里，命中后宿主 `load_emoji_binary` 抛 ValueError，整条回复发不出去。
+  现在清单刷新拆成独立循环，由新增的 `index.library_refresh_seconds`（默认 60）控制，与向量索引无关
+
+**细节**
+
+- 配置热更新重建索引对象前先把旧索引的脏缓存落盘，不再白丢最近的标签缓存
+- `_stop_sync_task` / `_stop_library_task` 只在「自己取消的那个任务已结束」时吞掉 CancelledError，
+  自身被取消时照常上抛
+- 测试 56 → 60：新增「向量关掉时清单任务照样起」「两个任务能干净停掉」「预算耗尽时不发嵌入」
+  「剩余预算压住单次嵌入超时」四条
+- manifest 版本对齐，`config.toml` / `config.toml.example` / README 版本号同步
+
 ## 0.1.8
 
 ### 细节
