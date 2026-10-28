@@ -57,6 +57,9 @@ Hook 自身超时是 5000ms，超时后宿主会丢弃整个 modified_kwargs（�
 """
 TEXT_COMPONENT = "text"
 EMOJI_COMPONENT = "emoji"
+AT_COMPONENT = "at"
+IMAGE_COMPONENT = "image"
+REPLY_COMPONENT = "reply"
 
 
 class PluginSectionConfig(PluginConfigBase):
@@ -67,7 +70,7 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_order__ = 0
 
     enabled: bool = Field(default=True, description="是否启用插件；关掉后发送链路完全不受影响")
-    config_version: str = Field(default="0.1.9", description="配置版本")
+    config_version: str = Field(default="0.1.10", description="配置版本")
 
 
 class BehaviorConfig(PluginConfigBase):
@@ -310,8 +313,10 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         new_message["raw_message"] = new_components
         plain_text = _render_plain_text(new_components)
         if plain_text is not None:
-            # 宿主只在「引用回复」或该字段为空时重算，不主动写的话历史里会留下假标签
+            # 宿主只在「引用回复」或该字段为空时重算，不主动写的话历史里会留下假标签。
+            # 顶层参数也同步一份：排在后面的 blocking Hook 读到的是 kwargs 里的那份。
             new_message["processed_plain_text"] = plain_text
+            modified_kwargs["processed_plain_text"] = plain_text
         new_message["is_emoji"] = _is_single_emoji(new_components)
         modified_kwargs["message"] = new_message
         return {"action": "continue", "modified_kwargs": modified_kwargs}
@@ -680,7 +685,11 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         if not isinstance(result, dict) or not result.get("success"):
             error_message = result.get("error") if isinstance(result, dict) else result
             raise RuntimeError(f"嵌入请求失败: {error_message}")
-        return [float(value) for value in (result.get("embedding") or [])]
+        # 宿主成功时必带 embedding；缺字段只可能是契约漂移，不能降级成空向量当"未命中"处理
+        raw = result.get("embedding")
+        if not isinstance(raw, list) or not raw:
+            raise RuntimeError(f"嵌入返回缺少 embedding 字段: keys={sorted(result)}")
+        return [float(value) for value in raw]
 
     async def _embed_texts(self, texts: List[str], max_concurrent: int) -> Tuple[List[List[float]], str]:
         """批量嵌入，返回向量列表与模型名。"""
@@ -700,7 +709,11 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         for index, item in enumerate(raw_results):
             if not isinstance(item, dict):
                 raise RuntimeError(f"批量嵌入第 {index} 条结果不是对象: {type(item).__name__}")
-            vectors.append([float(value) for value in (item.get("embedding") or [])])
+            # 与单条路径同一口径：缺字段是硬错误，不能变成空向量让 dim<=0 静默 break
+            embedding = item.get("embedding")
+            if not isinstance(embedding, list) or not embedding:
+                raise RuntimeError(f"批量嵌入第 {index} 条缺少 embedding: keys={sorted(item)}")
+            vectors.append([float(value) for value in embedding])
         model_name = str((raw_results[0].get("model_name") if raw_results else "") or "")
         return vectors, model_name
 
@@ -708,9 +721,12 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
 def _render_plain_text(components: Sequence[Any]) -> Optional[str]:
     """按重建后的组件拼可见纯文本，让历史里不再留假标签。
 
-    只在「所有组件都是文字或表情」时才接管：at / reply / image 这些宿主有自己的拼法，
-    硬拼会把别的组件丢掉。宿主也只在引用回复或该字段为空时才重算，
-    所以这里不主动写的话，`processed_plain_text` 会一直是带假标签的原文。
+    拼法与宿主 `send_service._build_processed_plain_text` 对齐（同样的组件类型、同样的 " "
+    分隔），这样消息里夹着 at / reply / image 时也能算出正确文本 —— 以前这里遇到这几种组件
+    就整体放弃，`processed_plain_text` 于是保留带假标签的原文并随 `to_db_instance` 落库，
+    下一轮 prompt 继续模仿，正是插件要断掉的回路。
+
+    真正无法识别的组件才返回 ``None``，交给宿主按它自己的规则处理。
     """
 
     parts: List[str] = []
@@ -718,11 +734,27 @@ def _render_plain_text(components: Sequence[Any]) -> Optional[str]:
         if not isinstance(component, dict):
             return None
         component_type = component.get("type")
+        data = component.get("data")
         if component_type in (TEXT_COMPONENT, EMOJI_COMPONENT):
-            parts.append(str(component.get("data") or ""))
-            continue
-        return None
-    text = "".join(parts).strip()
+            parts.append(str(data or ""))
+        elif component_type == AT_COMPONENT:
+            payload = data if isinstance(data, dict) else {}
+            target = (
+                payload.get("target_user_cardname")
+                or payload.get("target_user_nickname")
+                or payload.get("target_user_id")
+                or ""
+            )
+            parts.append(f"@{target}")
+        elif component_type == REPLY_COMPONENT:
+            payload = data if isinstance(data, dict) else {}
+            parts.append(str(payload.get("target_message_content") or "[回复消息]"))
+        elif component_type == IMAGE_COMPONENT:
+            # 宿主用 ImageComponent.content，取不到就给占位符；绝不要把 dict 印成字符串
+            parts.append(str(data).strip() if isinstance(data, str) and data.strip() else "[图片]")
+        else:
+            return None
+    text = " ".join(part for part in parts if part).strip()
     return text or None
 
 

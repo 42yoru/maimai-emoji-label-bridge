@@ -187,18 +187,27 @@ class HookTest(_BridgeTestBase):
         self.assertEqual(message["raw_message"][0]["data"], "好呀")
         self.assertEqual(message["raw_message"][1]["type"], "emoji")
 
-    async def test_plain_text_untouched_when_at_present(self) -> None:
-        """带 at 组件的消息不接管 processed_plain_text，交给宿主自己拼。"""
+    async def test_plain_text_rewritten_when_at_present(self) -> None:
+        """带 at 组件时也要重算 processed_plain_text，否则假标签会随历史落库。"""
 
-        record = _record("害羞", "hash-real")
+        record = _record("摸摸头,撒娇", "hash-real")
         plugin = _build_plugin(self.data_dir)
         plugin._library = EmojiLibrary([record])
-        message = _make_message(_text("[表情包: 害羞]"), {"type": "at", "data": "123456"})
-        message["processed_plain_text"] = "原文"
+        message = _make_message(
+            {"type": "at", "data": {"target_user_id": "123456", "target_user_nickname": "小明"}},
+            _text("[表情包: 摸摸头]"),
+        )
+        stale = "@小明 [表情包: 摸摸头]"
+        message["processed_plain_text"] = stale
 
         result = await plugin.bridge_after_build_message(message=message, stream_id="s-1")
 
-        self.assertEqual(result["modified_kwargs"]["message"]["processed_plain_text"], "原文")
+        plain_text = result["modified_kwargs"]["message"]["processed_plain_text"]
+        # 原来这里会整体放弃重算、把原文原样写回历史；现在按宿主口径重拼
+        self.assertNotEqual(plain_text, stale)
+        self.assertEqual(plain_text, "@小明 [表情包: 摸摸头,撒娇]")
+        # 顶层参数也要同步，排在后面的 blocking hook 读到的是这一份
+        self.assertEqual(result["modified_kwargs"]["processed_plain_text"], plain_text)
 
     async def test_fullwidth_brackets_are_supported(self) -> None:
         """全角方括号写法的假标签也要能接住。"""
@@ -659,3 +668,27 @@ class VectorBudgetTest(_BridgeTestBase):
 
         self.assertEqual(len(seen), 1)
         self.assertLessEqual(seen[0], plugin.config.match.vector_timeout_ms)
+
+
+class EmbedContractTest(_BridgeTestBase):
+    """嵌入返回缺字段是硬错误，不能降级成空向量当"未命中"。"""
+
+    async def test_single_missing_embedding_raises(self) -> None:
+        plugin = _build_plugin(self.data_dir)
+
+        async def bad_embed(**_kwargs: Any) -> Any:
+            return {"success": True, "embedding": None}
+
+        plugin.ctx.llm = SimpleNamespace(embed=bad_embed)
+        with self.assertRaises(RuntimeError):
+            await plugin._embed_text("害羞")
+
+    async def test_batch_missing_embedding_raises(self) -> None:
+        plugin = _build_plugin(self.data_dir)
+
+        async def bad_embed(**_kwargs: Any) -> Any:
+            return {"success": True, "results": [{"model_name": "m"}]}
+
+        plugin.ctx.llm = SimpleNamespace(embed=bad_embed)
+        with self.assertRaises(RuntimeError):
+            await plugin._embed_texts(["害羞"], 2)

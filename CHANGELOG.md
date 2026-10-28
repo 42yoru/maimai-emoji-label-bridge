@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.1.10
+
+### 修复
+
+- **带 at / image / reply 组件时假标签仍会进历史**：`_render_plain_text` 遇到这几种组件就整体
+  返回 `None`，插件于是不写 `processed_plain_text`，而宿主只在「引用回复」或该字段为空时才重算 ——
+  结果 `raw_message` 已经是真表情、纯文本仍是 `[表情包: 害羞]`，并随 `to_db_instance` 落库，
+  下一轮 prompt 继续模仿，正是插件要断掉的回路。现在按宿主 `_build_processed_plain_text` 的口径
+  拼 at / reply / image，并改用同样的空格分隔（原来用空串拼接，同一段消息在 set_reply 开关下
+  会得到两种文本）
+- **顶层 `processed_plain_text` 没有同步**：排在 NORMAL 之后的 blocking Hook 读到的是旧文本，
+  现在 `modified_kwargs` 里也写一份
+- **嵌入返回缺 `embedding` 字段被降级成空向量**：`result.get("embedding") or []` 把契约漂移变成
+  「未命中」，批量侧则让 `dim <= 0` 静默 break（`failed=True` 却没有一句原因）。现在单条与批量
+  都直接抛错并带出返回体的键名
+
+**细节**
+
+- 测试 60 → 62：新增「单条嵌入缺字段要抛」「批量嵌入缺字段要抛」两条；
+  `test_plain_text_untouched_when_at_present` 改为 `test_plain_text_rewritten_when_at_present`
+  （原来那条把「整体放弃重算」写成了期望行为）
+
 ## 0.1.9
 
 ### 修复
