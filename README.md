@@ -129,6 +129,6 @@
 | 项 | 值 |
 | --- | --- |
 | 插件 ID | `github.42yoru.maimai-emoji-label-bridge` |
-| 版本 | 0.1.12 |
+| 版本 | 0.1.13 |
 | 仓库 | <https://github.com/42yoru/maimai-emoji-label-bridge> |
 | 许可证 | MIT |
