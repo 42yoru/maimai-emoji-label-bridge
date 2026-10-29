@@ -14,6 +14,9 @@ from emoji_label_bridge.plugin import EmojiLabelBridgePlugin
 EXPECTED_FIELDS: Set[Tuple[str, str]] = {
     ("plugin", "enabled"),
     ("plugin", "config_version"),
+    ("punctuation", "enabled"),
+    ("punctuation", "strip_trailing_chars"),
+    ("punctuation", "keep_if_only"),
     ("behavior", "miss_policy"),
     ("behavior", "dedupe_with_existing_emoji"),
     ("behavior", "max_tags_per_message"),

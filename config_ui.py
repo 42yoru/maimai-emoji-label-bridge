@@ -32,6 +32,19 @@ _SECTIONS: Dict[str, _Section] = {
             "max_tags_per_message": "单条消息最多处理几个标签",
         },
     ),
+    "punctuation": _Section(
+        source="punctuation",
+        title="句末标点（附带）",
+        description=(
+            "附带的小开关：只作用于**没有**假标签的普通文本，去掉结尾的句号。默认关闭。"
+        ),
+        fields={
+            "enabled": "去掉句末标点",
+            "strip_trailing_chars": "要去掉的句末字符",
+            "keep_if_only": "整条只有标点就保留",
+        },
+        collapsed=True,
+    ),
     "match_core": _Section(
         source="match",
         title="匹配与阈值",
@@ -91,10 +104,21 @@ _SECTIONS: Dict[str, _Section] = {
 
 _TABS = {
     "basic": ("常用设置", ("behavior", "match_core", "index_core")),
-    "advanced": ("高级", ("match_adv", "index_adv", "plugin_info")),
+    "advanced": ("高级", ("match_adv", "index_adv", "punctuation", "plugin_info")),
 }
 
 _HINTS: Dict[str, str] = {
+    "punctuation.enabled": (
+        "默认关闭。只作用于**没有**假标签的普通文本（带表情标签的消息不做清理），"
+        "去掉的是句末标点、句中不动。"
+    ),
+    "punctuation.strip_trailing_chars": (
+        "逐字符匹配的句末字符集合，默认「。」。想要更随意可以加「，」；"
+        "别加半角「.」，会误伤 1.5、v0.1.13 这类写在句尾的写法。"
+    ),
+    "punctuation.keep_if_only": (
+        "整条消息去掉标点后什么都不剩（比如只发了一个「。」）时保留原样，避免发出空消息。"
+    ),
     "behavior.miss_policy": (
         "drop = 删掉标签、正文照常发；keep = 保留「[表情包: …]」原文；abort = 取消这条消息。"
     ),

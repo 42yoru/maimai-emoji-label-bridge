@@ -70,7 +70,7 @@ class PluginSectionConfig(PluginConfigBase):
     __ui_order__ = 0
 
     enabled: bool = Field(default=True, description="是否启用插件；关掉后发送链路完全不受影响")
-    config_version: str = Field(default="0.1.13", description="配置版本")
+    config_version: str = Field(default="0.2.0", description="配置版本")
 
 
 class BehaviorConfig(PluginConfigBase):
@@ -193,6 +193,30 @@ class IndexConfig(PluginConfigBase):
     )
 
 
+class PunctuationConfig(PluginConfigBase):
+    """出站文本的句末标点清理。"""
+
+    __ui_label__ = "句末标点"
+    __ui_icon__ = "eraser"
+    __ui_order__ = 4
+
+    enabled: bool = Field(
+        default=False,
+        description=(
+            "是否去掉出站文本句末的标点，让语气更像随手打字。"
+            "只作用在 text 组件的**结尾**，句中不动；只影响发送，不改历史里已有的内容"
+        ),
+    )
+    strip_trailing_chars: str = Field(
+        default="。",
+        description="要去掉的句末字符集合（逐字符匹配，默认只有中文句号）；填多个就都去掉",
+    )
+    keep_if_only: bool = Field(
+        default=True,
+        description="整条消息去掉标点后什么都不剩时保留原样，避免发出空消息",
+    )
+
+
 class BridgeConfig(PluginConfigBase):
     """表情标签桥接插件配置模型。"""
 
@@ -200,6 +224,7 @@ class BridgeConfig(PluginConfigBase):
     behavior: BehaviorConfig = Field(default_factory=BehaviorConfig)
     match: MatchConfig = Field(default_factory=MatchConfig)
     index: IndexConfig = Field(default_factory=IndexConfig)
+    punctuation: PunctuationConfig = Field(default_factory=PunctuationConfig)
 
 
 @dataclass
@@ -288,25 +313,37 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         error_policy=ErrorPolicy.SKIP,
     )
     async def bridge_after_build_message(self, **kwargs: Any) -> Dict[str, Any]:
-        """检查并改写即将发送的消息。"""
+        """检查并改写即将发送的消息。
+
+        两条互斥的路径，不叠加处理：
+
+        - **没有假标签**：只做句末标点清理（``[punctuation] enabled`` 打开时），没改动就放行；
+        - **有假标签**：只走标签桥接，标点清理不参与——这样就不存在"标签被丢掉之后
+          剩余文本还要不要再清一遍"这种先后顺序问题。
+        """
 
         if not self.config.plugin.enabled:
             return {"action": "continue"}
         message = kwargs.get("message")
         if not isinstance(message, dict):
             return {"action": "continue"}
-        components = message.get("raw_message")
+        components: Sequence[Any] = message.get("raw_message")
         if not isinstance(components, list) or not components:
             return {"action": "continue"}
-        if not self._has_text_tag(components):
-            return {"action": "continue"}
 
-        new_components = await self._process_components(components)
-        if new_components is None:
-            return {"action": "continue"}
-        if not new_components:
-            self.ctx.logger.info("出站消息只含未命中标签，已取消发送: session_id=%s", kwargs.get("stream_id"))
-            return {"action": "abort"}
+        if self._has_text_tag(components):
+            bridged = await self._process_components(components)
+            if bridged is None:
+                return {"action": "continue"}
+            if not bridged:
+                self.ctx.logger.info("出站消息只含未命中标签，已取消发送: session_id=%s", kwargs.get("stream_id"))
+                return {"action": "abort"}
+            new_components = bridged
+        else:
+            cleaned = self._clean_trailing_marks(components)
+            if cleaned is None:
+                return {"action": "continue"}
+            new_components = cleaned
 
         modified_kwargs = dict(kwargs)
         new_message = dict(message)
@@ -320,6 +357,34 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         new_message["is_emoji"] = _is_single_emoji(new_components)
         modified_kwargs["message"] = new_message
         return {"action": "continue", "modified_kwargs": modified_kwargs}
+
+    def _clean_trailing_marks(self, components: Sequence[Any]) -> Optional[List[Dict[str, Any]]]:
+        """去掉文本组件句末的标点；没有实际变化时返回 ``None``。
+
+        只处理 ``text`` 组件，且只看它自己的结尾——句中不动，表情 / at / 引用 / 图片
+        这些组件一律原样带过去。
+        """
+
+        settings = self.config.punctuation
+        if not settings.enabled or not settings.strip_trailing_chars:
+            return None
+
+        result: List[Dict[str, Any]] = []
+        changed = False
+        for component in components:
+            if not isinstance(component, dict) or component.get("type") != TEXT_COMPONENT:
+                result.append(component)
+                continue
+            text = str(component.get("data") or "")
+            stripped = _strip_trailing_marks(text, settings.strip_trailing_chars)
+            if stripped != text and not (settings.keep_if_only and not stripped.strip()):
+                result.append({**component, "data": stripped})
+                changed = True
+                continue
+            # 没变化，或者去掉之后整条什么都不剩（比如只发了一个「。」）——保留原样
+            result.append(component)
+
+        return result if changed else None
 
     @staticmethod
     def _has_text_tag(components: Sequence[Any]) -> bool:
@@ -762,6 +827,25 @@ def _render_plain_text(components: Sequence[Any]) -> Optional[str]:
             return None
     text = " ".join(part for part in parts if part).strip()
     return text or None
+
+
+def _strip_trailing_marks(text: str, marks: str) -> str:
+    """去掉字符串句末的指定标点（连同它后面的空白），句中不动。
+
+    Args:
+        text: 原始文本。
+        marks: 需要去掉的字符集合，逐字符匹配。
+
+    Returns:
+        str: 处理后的文本；一个标点都没有时原样返回。
+    """
+
+    if not marks:
+        return text
+    stripped = text.rstrip()
+    while stripped and stripped[-1] in marks:
+        stripped = stripped[:-1].rstrip()
+    return stripped
 
 
 def _is_single_emoji(components: Sequence[Any]) -> bool:

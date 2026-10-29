@@ -1,6 +1,6 @@
 [plugin]
 enabled = true
-config_version = "0.1.13"
+config_version = "0.2.0"
 
 [behavior]
 # 匹配不到表情时怎么办：
@@ -55,3 +55,12 @@ description_max_chars = 256
 cache_size = 512
 # 标签缓存有效期（秒），0 表示不过期
 cache_ttl_seconds = 604800
+
+[punctuation]
+# 是否去掉出站文本句末的标点，让语气更像随手打字
+# 默认关闭：它会改变所有出站文本的观感，先自己看一眼喜不喜欢再开
+enabled = false
+# 要去掉的句末字符集合，逐字符匹配；不要加半角「.」（会误伤 v0.1.13 这类写法）
+strip_trailing_chars = "。"
+# 整条消息去掉标点后什么都不剩时保留原样，避免发出空消息
+keep_if_only = true

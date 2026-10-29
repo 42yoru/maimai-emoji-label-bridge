@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List, Sequence, Tuple
-from unittest import IsolatedAsyncioTestCase
+from unittest import IsolatedAsyncioTestCase, TestCase
 
 import logging
 import tempfile
@@ -746,3 +746,110 @@ class IndexQuarantineTest(_BridgeTestBase):
 
         self.assertEqual(index.size, 0)
         self.assertTrue(Path(str(index_path) + ".bad").exists())
+
+
+class PunctuationTest(_BridgeTestBase):
+    """句末标点清理：只动 text 组件自己的结尾。"""
+
+    async def test_trailing_period_removed(self) -> None:
+        plugin = _build_plugin(self.data_dir, punctuation={"enabled": True})
+
+        result = await plugin.bridge_after_build_message(
+            message=_make_message(_text("今晚不打团了。")), stream_id="s-1"
+        )
+
+        message = result["modified_kwargs"]["message"]
+        self.assertEqual(message["raw_message"][0]["data"], "今晚不打团了")
+        # 历史里存的纯文本也要同步，不然下一轮 prompt 还是带句号的版本
+        self.assertEqual(message["processed_plain_text"], "今晚不打团了")
+        self.assertEqual(result["modified_kwargs"]["processed_plain_text"], "今晚不打团了")
+
+    async def test_inner_period_is_kept(self) -> None:
+        plugin = _build_plugin(self.data_dir, punctuation={"enabled": True})
+
+        result = await plugin.bridge_after_build_message(
+            message=_make_message(_text("先这样。晚点再说。")), stream_id="s-1"
+        )
+
+        self.assertEqual(result["modified_kwargs"]["message"]["raw_message"][0]["data"], "先这样。晚点再说")
+
+    async def test_multiple_trailing_periods_removed(self) -> None:
+        plugin = _build_plugin(self.data_dir, punctuation={"enabled": True})
+
+        result = await plugin.bridge_after_build_message(
+            message=_make_message(_text("好了。。")), stream_id="s-1"
+        )
+
+        self.assertEqual(result["modified_kwargs"]["message"]["raw_message"][0]["data"], "好了")
+
+    async def test_only_punctuation_is_kept(self) -> None:
+        """整条只剩标点就保留原样，别发出一个空消息。"""
+
+        plugin = _build_plugin(self.data_dir, punctuation={"enabled": True})
+
+        result = await plugin.bridge_after_build_message(
+            message=_make_message(_text("。")), stream_id="s-1"
+        )
+
+        self.assertEqual(result, {"action": "continue"})
+
+    async def test_disabled_by_default(self) -> None:
+        plugin = _build_plugin(self.data_dir)
+
+        result = await plugin.bridge_after_build_message(
+            message=_make_message(_text("今晚不打团了。")), stream_id="s-1"
+        )
+
+        self.assertEqual(result, {"action": "continue"})
+
+    async def test_emoji_component_untouched(self) -> None:
+        """表情组件不是文本，不该被清理波及。"""
+
+        plugin = _build_plugin(self.data_dir, punctuation={"enabled": True})
+
+        result = await plugin.bridge_after_build_message(
+            message=_make_message(_text("好呀。"), _emoji()), stream_id="s-1"
+        )
+
+        components = result["modified_kwargs"]["message"]["raw_message"]
+        self.assertEqual(components[0]["data"], "好呀")
+        self.assertEqual(components[1]["type"], "emoji")
+        self.assertEqual(components[1]["hash"], "existing-hash")
+
+    async def test_tagged_message_skips_cleanup(self) -> None:
+        """有假标签就走标签路径，标点清理不参与——两条路径互斥，不叠加处理。"""
+
+        plugin = _build_plugin(self.data_dir, punctuation={"enabled": True})
+        plugin._library = EmojiLibrary([])  # 空库 → 标签必然未命中 → 默认 drop
+
+        result = await plugin.bridge_after_build_message(
+            message=_make_message(_text("好呀。[表情包: 害羞]")), stream_id="s-1"
+        )
+
+        # 标签被删掉，但剩下的文本保持原样：带标签的消息不做标点清理
+        self.assertEqual(result["modified_kwargs"]["message"]["raw_message"][0]["data"], "好呀。")
+
+    async def test_halfwidth_dot_is_not_touched(self) -> None:
+        """默认只认中文句号，别误伤 v0.1.13 这种写在句尾的写法。"""
+
+        plugin = _build_plugin(self.data_dir, punctuation={"enabled": True})
+
+        result = await plugin.bridge_after_build_message(
+            message=_make_message(_text("当前版本 v0.1.13.")), stream_id="s-1"
+        )
+
+        # 半角句点不在默认字符集里，什么都改不到 → 直接放行
+        self.assertEqual(result, {"action": "continue"})
+
+
+class StripHelperTest(TestCase):
+    """``_strip_trailing_marks`` 的边界。"""
+
+    def test_strips_trailing_whitespace_after_mark(self) -> None:
+        self.assertEqual(plugin_module._strip_trailing_marks("好了。  ", "。"), "好了")
+
+    def test_empty_marks_is_noop(self) -> None:
+        self.assertEqual(plugin_module._strip_trailing_marks("好了。", ""), "好了。")
+
+    def test_no_mark_returns_original(self) -> None:
+        self.assertEqual(plugin_module._strip_trailing_marks("好了", "。"), "好了")

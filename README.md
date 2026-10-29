@@ -111,6 +111,10 @@
 | `index.enabled` | `true` | 关掉就完全不碰嵌入模型 |
 | `index.sync_interval_seconds` | `600` | 增量同步间隔 |
 
+> **附带一个小开关**（默认关闭）：`[punctuation] enabled = true` 时，插件会去掉**没有假标签**的普通
+> 文本结尾的句号（只动结尾、句中不动），让气泡更像随手打字；带表情标签的消息不参与清理。
+> 字符集用 `strip_trailing_chars` 调（默认只有「。」，别加半角 `.`，会误伤 `v0.1.13` 这类写法）。
+
 ## 兼容性
 
 - 只依赖 `send_service.after_build_message`（允许 abort、允许改 kwargs），旧 `reply` 工具、被动式 replyer、Focus 都走同一个发送层，一视同仁；
@@ -129,6 +133,6 @@
 | 项 | 值 |
 | --- | --- |
 | 插件 ID | `github.42yoru.maimai-emoji-label-bridge` |
-| 版本 | 0.1.13 |
+| 版本 | 0.2.0 |
 | 仓库 | <https://github.com/42yoru/maimai-emoji-label-bridge> |
 | 许可证 | MIT |
