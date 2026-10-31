@@ -32,8 +32,8 @@ logger = logging.getLogger("plugin.emoji_label_bridge.vector_index")
 EmbedTextsFn = Callable[[List[str], int], Awaitable[Tuple[List[List[float]], str]]]
 EmbedTextFn = Callable[[str], Awaitable[List[float]]]
 
-INDEX_VERSION = 1
-CACHE_VERSION = 1
+INDEX_VERSION = 2
+CACHE_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -58,10 +58,13 @@ class VectorHit:
 def _normalize_vector(values: Sequence[float]) -> List[float]:
     """把向量归一化成单位长度；零向量原样返回。"""
 
-    norm = math.sqrt(math.fsum(value * value for value in values))
-    if norm <= 0.0:
-        return list(values)
-    return [value / norm for value in values]
+    numeric = [float(value) for value in values]
+    if not numeric or not all(math.isfinite(value) for value in numeric):
+        raise ValueError("向量必须为非空有限数值")
+    norm = math.sqrt(math.fsum(value * value for value in numeric))
+    if not math.isfinite(norm) or norm <= 0.0:
+        raise ValueError("向量长度必须为有限正数")
+    return [value / norm for value in numeric]
 
 
 def _pack_vector(values: Sequence[float]) -> str:
@@ -73,9 +76,13 @@ def _pack_vector(values: Sequence[float]) -> str:
 def _unpack_vector(raw: str) -> Tuple[float, ...]:
     """反序列化向量。"""
 
-    payload = base64.b64decode(raw.encode("ascii"))
+    payload = base64.b64decode(raw.encode("ascii"), validate=True)
     values = array("f")
+    if not payload or len(payload) % values.itemsize:
+        raise ValueError("向量字节长度不合法")
     values.frombytes(payload)
+    if not all(math.isfinite(value) for value in values) or not any(values):
+        raise ValueError("向量包含非有限值或为零向量")
     return tuple(values)
 
 
@@ -95,9 +102,11 @@ class VectorIndex:
         self._log = logger_ or logger
         self._items: Dict[str, Dict[str, Any]] = {}
         self._model: str = ""
+        self._task: str = ""
         self._dim: int = 0
         self._ready: bool = False
         self._cache: "OrderedDict[str, Tuple[Optional[str], float, float]]" = OrderedDict()
+        self._cache_generation = ""
         self._cache_dirty: bool = False
 
     # ──── 属性 ────
@@ -120,31 +129,49 @@ class VectorIndex:
 
         return self._model
 
+    @property
+    def task(self) -> str:
+        """索引所用的嵌入任务名。"""
+
+        return self._task
+
+    def set_task(self, task: str) -> None:
+        """切换嵌入任务时使旧索引失效。"""
+
+        normalized = str(task or "").strip()
+        if self._task and self._task != normalized:
+            self._items.clear()
+            self._cache.clear()
+            self._ready = False
+            self._cache_dirty = True
+        self._task = normalized
+
     # ──── 落盘 ────
 
     def load(self) -> None:
         """读取索引与查询缓存；文件损坏或缺字段时按空索引处理。"""
 
-        self._items, self._model, self._dim, self._ready = self._load_index_file()
+        self._items, self._model, self._dim, self._ready, self._task = self._load_index_file()
         self._cache = self._load_cache_file()
+        self._cache_generation = f"{self._model}:{self._task}:{self._dim}"
 
-    def _load_index_file(self) -> Tuple[Dict[str, Dict[str, Any]], str, int, bool]:
+    def _load_index_file(self) -> Tuple[Dict[str, Dict[str, Any]], str, int, bool, str]:
         """读取索引文件；损坏或缺字段时按空索引处理。"""
 
         if not self._index_path.exists():
-            return {}, "", 0, False
+            return {}, "", 0, False, ""
         try:
             payload = json.loads(self._index_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             self._log.warning("表情向量索引读取失败，将重建: %s", exc)
-            return {}, "", 0, False
+            return {}, "", 0, False, ""
         if not isinstance(payload, dict) or payload.get("version") != INDEX_VERSION:
             self._quarantine_index("版本不符或顶层不是对象")
-            return {}, "", 0, False
+            return {}, "", 0, False, ""
         raw_items = payload.get("items")
         if not isinstance(raw_items, dict):
             self._quarantine_index("items 字段缺失或不是对象")
-            return {}, "", 0, False
+            return {}, "", 0, False, ""
         items: Dict[str, Dict[str, Any]] = {}
         for emoji_hash, item in raw_items.items():
             if not isinstance(item, dict):
@@ -154,7 +181,15 @@ class VectorIndex:
                 continue
             items[str(emoji_hash)] = item
         complete = bool(payload.get("complete")) and bool(items)
-        return items, str(payload.get("model") or ""), int(payload.get("dim") or 0), complete
+        try:
+            dim = int(payload.get("dim") or 0)
+        except (TypeError, ValueError):
+            self._quarantine_index("dim 字段无效")
+            return {}, "", 0, False, ""
+        if dim < 0:
+            self._quarantine_index("dim 字段为负数")
+            return {}, "", 0, False, ""
+        return items, str(payload.get("model") or ""), dim, complete, str(payload.get("task") or "")
 
     def _quarantine_index(self, reason: str) -> None:
         """把损坏/版本不符的索引挪到 .bad 并留日志，别静默丢掉。"""
@@ -198,6 +233,7 @@ class VectorIndex:
         return {
             "version": INDEX_VERSION,
             "model": self._model,
+            "task": self._task,
             "dim": self._dim,
             "complete": self._ready,
             "items": self._items,
@@ -338,16 +374,18 @@ class VectorIndex:
             return None
         self._prune_cache(cache_ttl_seconds, cache_size)
 
+        candidate_hashes = {str(record.emoji_hash) for record in candidates}
         cached = self._cache.get(label)
         if cached is not None:
             emoji_hash, score, _ = cached
-            self._cache.move_to_end(label)
-            # 缓存里存的是"当时的最佳候选 + 分数"，命中与否用**当前**阈值判断：
-            # 以前未命中会存成 (None, 0)，用户把 vector_threshold 调低后仍然取不到，
-            # 得等缓存 TTL（默认 7 天）过期才生效。
-            if not emoji_hash or score < threshold:
-                return None
-            return VectorHit(emoji_hash=emoji_hash, score=score)
+            if emoji_hash and emoji_hash not in candidate_hashes:
+                cached = None
+            else:
+                self._cache.move_to_end(label)
+                # 缓存里存的是"当时的最佳候选 + 分数"，命中与否用当前阈值判断。
+                if not emoji_hash or score < threshold:
+                    return None
+                return VectorHit(emoji_hash=emoji_hash, score=score)
 
         try:
             vector = await asyncio.wait_for(embed_text(label), timeout=max(0.05, timeout_ms / 1000.0))
@@ -374,7 +412,11 @@ class VectorIndex:
             item = self._items.get(str(record.emoji_hash))
             if item is None:
                 continue
-            stored_vector = _unpack_vector(str(item.get("v") or ""))
+            try:
+                stored_vector = _unpack_vector(str(item.get("v") or ""))
+            except (TypeError, ValueError, UnicodeError) as exc:
+                self._log.warning("表情向量条目损坏，已跳过: hash=%s error=%s", str(record.emoji_hash)[:16], exc)
+                continue
             if len(stored_vector) != len(query_vector):
                 continue
             score = math.fsum(map(operator.mul, query_vector, stored_vector))

@@ -541,6 +541,8 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         index = self._index
         if index is None:
             return None
+        if hasattr(index, "set_task"):
+            index.set_task(self.config.index.embedding_task)
         candidates = self._library.coarse_candidates(label, self.config.match.candidate_limit)
         if not candidates:
             if self.config.match.require_char_overlap:
@@ -599,6 +601,7 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         # 索引是 ~6MB JSON，同步解析会直接卡住事件循环；加载/热更新都在 async 上下文里，
         # 所以放进线程跑
         await asyncio.to_thread(self._index.load)
+        self._index.set_task(self.config.index.embedding_task)
 
     async def _refresh_library(self) -> bool:
         """从宿主数据库重新读取表情清单。"""
@@ -724,6 +727,7 @@ class EmojiLabelBridgePlugin(MaiBotPlugin):
         index = self._index
         if index is None:
             return None
+        index.set_task(self.config.index.embedding_task)
         if self._library.size == 0:
             # 清单正常情况下由 _library_loop 刷新；这里是首轮读取失败后的兜底补读
             if not await self._refresh_library():

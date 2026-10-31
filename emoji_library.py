@@ -77,6 +77,8 @@ def build_records(rows: Iterable[Dict[str, Any]]) -> List[EmojiRecord]:
 
     records: List[EmojiRecord] = []
     for row in rows:
+        if not isinstance(row, dict):
+            continue
         emoji_hash = str(row.get("image_hash") or "").strip()
         description = str(row.get("description") or "").strip()
         if not emoji_hash or not description:

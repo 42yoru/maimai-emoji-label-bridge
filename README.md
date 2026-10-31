@@ -1,138 +1,113 @@
 # 表情标签桥接（Emoji Label Bridge）
 
-<p align="center">
-  <img src="icon.png" width="200" alt="插件图标">
-</p>
-
 <p>
   <a href="https://github.com/42yoru/maimai-emoji-label-bridge/actions/workflows/ci.yml"><img src="https://github.com/42yoru/maimai-emoji-label-bridge/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
   <a href="https://github.com/Mai-with-u/MaiBot"><img src="https://img.shields.io/badge/MaiBot-1.3.15%2B-orange.svg" alt="MaiBot"></a>
-  <a href="https://github.com/Mai-with-u/maibot-plugin-sdk"><img src="https://img.shields.io/badge/SDK-2.16.0%2B-green.svg" alt="SDK"></a>
+  <a href="https://github.com/Mai-with-u/maibot-plugin-sdk"><img src="https://img.shields.io/badge/SDK-2.12%2B-green.svg" alt="SDK"></a>
   <img src="https://img.shields.io/badge/python-3.11%2B-blue.svg" alt="Python">
 </p>
 
-把回复正文里**假的表情包标签**接成真表情。
+> **一句话定位：** 在发送层把模型写出的 `[表情包: …]` 文字标签转换为真实表情组件，并同步清理历史里的假标签。
 
-> **先回答三个常见问题**
->
-> - **它解决什么？** 模型偶尔会把表情包的渲染格式当正文写出来（`[表情包: 害羞,撒娇]`），对方收到的是一串字面文字，而且这条记录还会留在历史里，让下一轮更容易继续模仿。插件在发送前把这种标签换成真表情。
-> - **会不会把正常文字改坏？** 只有 `[表情包: …]` 这一种标记会被处理，其余文字原样保留；匹配不到时按配置删掉标签或保留原文，不会凭空塞图。
-> - **要改主程序吗？** 不用。纯插件，用的是宿主已有的发送层 hook 与 SDK 能力。
+## 适用与不适用
 
-## 先看效果
+**适用：**
 
-她的回复里出现了这样一条：
+- 模型把表情包渲染格式误写进回复正文；
+- 希望在不改 MaiBot 主程序的情况下，让旧 `reply` 工具、被动式 replyer 和 Focus 统一经过同一发送层处理；
+- 需要精确匹配、本地标签重叠匹配，以及可选的向量兜底。
 
+**不适用：**
+
+- 不负责生成表情描述或修改主程序；
+- 只处理文字标签，不会把已经拆成多条的文字重新合并；
+- 向量兜底只在 `match.only_whole_message=true` 时处理整条纯标签消息。
+
+## 快速安装
+
+### 插件市场
+
+在插件中心搜索“表情标签桥接”，或按插件 ID `github.42yoru.maimai-emoji-label-bridge` 查找。
+
+### 手动安装
+
+```bash
+cd MaiBot/plugins
+git clone https://github.com/42yoru/maimai-emoji-label-bridge.git
 ```
-她: 好呀，那就这么说定了
-她: [表情包: 害羞,撒娇,亲亲]   ← 假装出来的标签，只是一串文字
+
+然后重启 MaiBot 或触发插件热重载。宿主首次加载时会生成 `config.toml`；`config.toml.example` 仅供参考，不会自动读取。
+
+## 最小配置
+
+插件默认即可使用精确匹配和本地匹配。若需要向量兜底，在 `model_config.toml` 配置 `[model_task_config.embedding]`，并确认插件配置中启用索引：
+
+```toml
+[plugin]
+enabled = true
+
+[index]
+enabled = true
+
+[match]
+enable_vector = true
 ```
 
-插件在发送前把它换成真正的表情组件（带图片 hash），对方收到的是一张图；
-`processed_plain_text` 也一起重算，历史里不再有可供模仿的假标签。
-整条消息只剩这一个表情时还会把 `is_emoji` 置为真——这是宿主判定「表情消息」的口径，
-正文里夹表情的混合消息仍然算普通消息。
+没有可用嵌入模型时，插件会保留精确和本地两档，不会因此阻塞发送。没有嵌入需求时，可将 `index.enabled=false`，完全关闭这条出站数据流。
 
-## 三档匹配
+## 工作流程
 
-| 档位 | 触发条件 | 实测成本 | 说明 |
-| --- | --- | --- | --- |
-| 精确 | 标签归一化后与某张表情描述完全一致（或单标签命中） | <1ms | 覆盖「模型照抄历史里的真表情描述」这种最常见情况 |
-| 本地 | 标签与描述标签的重叠度 ≥ `local_threshold` | 5~20ms | 0.6×覆盖度 + 0.4×包含度，前 8 名再用 difflib 复算 |
-| 向量 | 前两档都没命中，且整条消息就是一条标签（`only_whole_message` 打开时） | 0.9~3.6s | 对标签做一次文本嵌入，与本地向量索引算余弦，≥ `vector_threshold` 才算命中 |
+1. 发送层检查文本中是否存在 `[表情包: …]` 标签。
+2. 依次尝试：精确匹配 → 本地标签重叠匹配 →（符合条件时）向量匹配。
+3. 命中后替换为带图片 hash 的真实表情组件，并重算 `processed_plain_text`；整条消息只剩一个表情时，按宿主口径设置 `is_emoji=true`。
+4. 未命中时按 `behavior.miss_policy` 执行：删除标签、保留文字，或取消整条消息。
+5. 后台任务按清单增量维护向量索引；模型或维度变化会重建索引。
 
-全部未命中时按 `behavior.miss_policy` 处理：`drop`（默认，删掉标签）/ `keep`（保留文字）/ `abort`（取消整条消息）。整条消息被删空时自动取消发送，不会发出空消息。
+匹配说明：精确匹配通常低于 1ms；本地匹配约 5–20ms；向量兜底实测约 0.9–3.6 秒，并受 `vector_timeout_ms` 和整轮预算限制。
 
-### 阈值是实测校准的
+## 配置表
 
-在约 590 张表情、`nemotron-3-embed-1b`（2048 维）的库上跑出来：
-
-| 标签 | 余弦 | 结果 |
+| 配置项 | 默认值 | 作用 |
 | --- | --- | --- |
-| 傲娇脸红到不行 | 0.785 | 命中「害羞,可爱,开心,脸红,卖萌」✓ |
-| 摸摸头 | 0.724 | 命中「摸头杀前置帧…」✓ |
-| 生气 | 0.869 | 命中「…即将生气请适可而止…」✓ |
-| 今天天气真好啊 | 0.655 | 低于阈值，按未命中处理 ✓ |
-
-所以默认阈值取 `0.68`：相关命中落在 0.71~0.87，无关内容大约 0.65 以下。
-另外向量命中还要求标签与描述有字符二元组重叠（`require_char_overlap`），
-挡住「语义分高但字面毫无关系」的胡配。
-
-## 向量索引怎么维护
-
-- 索引文件：`<插件数据目录>/emoji_vectors.json`，每条向量是单位化 float32 + base64，约 590 张表情共 6.5MB 上下（体积随维度线性变，换模型要重新估）；
-- 缓存文件：`<插件数据目录>/label_cache.json`，标签 → 命中结果（含未命中），重复标签零网络开销；
-- 数据源：只查宿主的 `images` 表（emoji、已注册、未封禁、文件存在），只取 hash 与描述，不拉图片；
-- 脏描述会被过滤：以 `[`/`【` 开头或带 `<|` 之类特殊 token 的描述不参与匹配；
-- 首次同步：加载 `startup_delay_seconds` 秒后开始，每批 `batch_size` 条、并发 `max_concurrent`，每轮最多补 `max_items_per_sync` 条；没补齐时按 `bootstrap_interval_seconds`（默认 5 秒）连续推进，590 条约 2.5 分钟建完；
-- 增量补录：每 `sync_interval_seconds`（默认 10 分钟）对一次清单，新增/移除/描述变化按 diff 处理——**新收录表情后的补向量就在这一轮**；
-- 就绪状态落盘（`complete` 字段），重启直接恢复；
-- 换嵌入模型或维度变化时整库重建；
-- 模型接口不可用时只打 warning 并跳过本轮，前两档照常工作，不阻塞发送。
-
-## 为什么对回复速度影响很小
-
-- 普通文字消息：一次子串判断直接返回；
-- 有标签且精确命中：查内存索引，微秒级；
-- 需要向量兜底：`only_whole_message = true` 时只对「整条消息就是一条标签」生效，而标签通常是分段发送的最后一段，正文早就发出去了；
-- 嵌入请求默认 3000ms 硬超时，超时按未命中处理，不会挂住发送。
-
-## 安装
-
-**从插件市场安装**：在插件中心搜索「表情标签桥接」，或按插件 ID `github.42yoru.maimai-emoji-label-bridge` 查找。
-
-**手动安装**：
-
-1. 把本目录放到 MaiBot 的 `plugins/` 下（目录名随意，ID 由 `_manifest.json` 决定）；
-2. 重启 MaiBot，或在插件页触发热重载；
-3. 首次加载会自动生成 `config.toml`（`config.toml.example` 只是带注释的参考，不会被自动读取）；
-4. 在 WebUI 插件页确认已启用。首次启动约 30 秒后开始建向量索引，期间精确/本地两档已可用。
-
-> **嵌入模型依赖**：向量兜底需要宿主在 `model_config.toml` 里配好 `[model_task_config.embedding]`。没配或调用失败时，插件自动只走「精确 + 本地」两档，不影响发送，也不会输出错误的表情。
-
-**数据流向**：同步期会把每条表情的描述文本、发送期会把被兜底的标签文本，经宿主的 `llm.embed` 能力发往 `model_config.toml` 里 `model_task_config.embedding` 指向的模型服务；不发送图片二进制，也不发送聊天记录。把 `index.enabled=false` 可以完全关掉这条出站。
-
-## 配置
-
-见 `config.toml(.example)`，除只读的配置版本外都能在 WebUI 配置页改。关键几项：
-
-| 配置项 | 默认 | 作用 |
-| --- | --- | --- |
-| `behavior.miss_policy` | `drop` | 没命中时删标签 / 保留文字 / 取消整条消息 |
-| `behavior.max_tags_per_message` | `3` | 单条消息最多处理几个标签 |
-| `behavior.dedupe_with_existing_emoji` | `true` | 本次已带真表情时删掉正文标签 |
-| `match.local_threshold` | `0.5` | 本地重叠度阈值 |
-| `match.enable_vector` | `true` | 是否启用嵌入兜底 |
+| `behavior.miss_policy` | `drop` | 未命中时删除标签、保留文字，或取消整条消息 |
+| `behavior.max_tags_per_message` | `3` | 单条消息最多处理的标签数 |
+| `behavior.dedupe_with_existing_emoji` | `true` | 已有真实表情时是否删除正文标签 |
+| `match.local_threshold` | `0.5` | 本地标签重叠阈值 |
+| `match.enable_vector` | `true` | 是否启用向量兜底 |
 | `match.vector_threshold` | `0.68` | 向量余弦阈值 |
-| `match.vector_timeout_ms` | `3000` | 单次嵌入硬超时 |
-| `match.only_whole_message` | `true` | 只在纯标签消息上走向量 |
-| `match.require_char_overlap` | `true` | 向量命中还要求字面重叠 |
-| `index.enabled` | `true` | 关掉就完全不碰嵌入模型 |
+| `match.vector_timeout_ms` | `3000` | 单次嵌入请求超时（毫秒） |
+| `match.only_whole_message` | `true` | 仅对整条纯标签消息使用向量兜底 |
+| `match.require_char_overlap` | `true` | 向量命中还必须有字符二元组重叠 |
+| `index.enabled` | `true` | 是否维护和使用向量索引 |
 | `index.sync_interval_seconds` | `600` | 增量同步间隔 |
+| `punctuation.enabled` | `false` | 是否清理无假标签普通文本末尾的句号 |
 
-> **附带一个小开关**（默认关闭）：`[punctuation] enabled = true` 时，插件会去掉**没有假标签**的普通
-> 文本结尾的句号（只动结尾、句中不动），让气泡更像随手打字；带表情标签的消息不参与清理。
-> 字符集用 `strip_trailing_chars` 调（默认只有「。」，别加半角 `.`，会误伤 `v0.1.13` 这类写法）。
+`punctuation.strip_trailing_chars` 默认只有中文句号“。”；不建议加入半角句点，以免误伤 `v0.1.13` 等文本。
 
-## 兼容性
+## 边界与隐私
 
-- 只依赖 `send_service.after_build_message`（允许 abort、允许改 kwargs），旧 `reply` 工具、被动式 replyer、Focus 都走同一个发送层，一视同仁；
-- 不改主程序，不写全局状态；宿主访问全部走 SDK 能力（`database.query`、`llm.embed`）；
-- Runner 把插件跑在独立进程里，插件异常按 `error_policy=skip` 处理，不会影响消息发送。
+- 数据源只读取宿主 `images` 表中的 hash 和描述，不读取图片二进制。
+- 向量同步会把表情描述发送给 `model_task_config.embedding` 指向的模型；向量兜底会把标签文本发送给同一任务，不发送聊天记录。请按模型服务商的隐私策略配置，或关闭 `index.enabled`。
+- 向量索引位于 `<插件数据目录>/emoji_vectors.json`；标签缓存位于 `<插件数据目录>/label_cache.json`。缓存会保存标签及命中结果，默认 TTL 为 604800 秒。
+- 脏描述、文件缺失的表情不会进入索引；嵌入超时或模型不可用时按未命中处理。
+- 文字中夹有 at、引用、图片等组件时，插件尽量重算可见纯文本；不认识的组件交给宿主处理。
 
-## 已知边界
+## 测试
 
-- 嵌入接口延迟抖动较大（实测 0.9~3.6s），抖到超过 `vector_timeout_ms` 时这张表情会被放弃，而不是塞一张错的图；
-- 只做「文字标签 → 表情组件」，不会把已经被拆成多条的文字重新合并；
-- 同一消息多个标签逐个匹配，受 `max_tags_per_message` 限制；
-- 文件缺失的表情记录不进索引，避免发送时读文件失败。
+在插件目录运行：
+
+```bash
+python -m pytest tests -q
+```
+
+测试覆盖标签解析、三档匹配、发送层改写、配置、向量缓存和超时行为。
 
 ## 插件信息
 
-| 项 | 值 |
+| 项目 | 值 |
 | --- | --- |
 | 插件 ID | `github.42yoru.maimai-emoji-label-bridge` |
-| 版本 | 0.2.0 |
+| 版本 | `0.2.0` |
 | 仓库 | <https://github.com/42yoru/maimai-emoji-label-bridge> |
 | 许可证 | MIT |
